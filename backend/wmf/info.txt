@@ -1,0 +1,88 @@
+
+# 8000 portunu kim tutuyor:
+Get-NetTCPConnection -LocalPort 8000 -State Listen | Select-Object LocalAddress,LocalPort,OwningProcess
+
+# python uygulamasını kapat
+taskkill /IM python.exe /F
+taskkill /F /PID
+
+# 8000 portu kim dinliyor kontrol et
+netstat -ano | findstr :8000
+
+
+# uygulamayı çalıştır
+py -m uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+
+
+
+
+docker run -d --name frsim --restart unless-stopped ` -p 8080:80 ` -p 8083:8083 ` -p 20003-20010:20003-20010 ` -p 20003-20010:20003-20010/udp ` frsim
+
+
+
+uygulama run olduğu 1- bağlı adaptörleri listele 2- bağlan : bağlanacak adaptör seçeneğini belirt işlemi ile çalıştırılabilir. daha mantıklı olacaktır.
+
+
+
+Servis ekranı menüsü ;
+
+Ürün Kartı Ekranı
+Seri no ile arama. Tek ekranda: cihaz bilgisi, kime/ne zaman teslim edildiği, garanti durumu (kalan gün sayacı ile), tüm servis geçmişi listesi, tüm dokümanlar (yüklenen dokümanlar ayrıca donwload yapılabilmeli). Bu ekran sistemin kalbi — önce bunu yapın.
+
+Teslimat / Satış Kaydı Ekranı
+Ürün seç → müşteri seç → fatura/irsaliye bilgisi gir → evrak yükle → standart garantiyi otomatik oluştur.
+
+Servis Kaydı Açma/Kapatma Ekranı
+Seri no gir → sistem müşteriyi ve garanti durumunu otomatik getirsin → "garanti kapsamında mı?" alanını otomatik önersin (garanti bitiş tarihine bakarak). Kapanışta: yapılan işlem, süre, parça, imzalı servis formu yükleme zorunlu.
+
+Garanti Aktivasyon / Uzatma Ekranı
++1 / +2 yıl seçenekleri. Uzatma yeni satır olarak eklenmeli, mevcut kaydın tarihi ezilmemeli (geçmiş izlenebilirliği için).
+
+Müşteri 360° Ekranı
+Müşterinin tüm robotları, açık servis kayıtları, garanti durumları, toplam servis maliyeti.
+
+Servis sayfası için Otomasyon kuralları ;
+Garanti bitişine 30/60 gün kala uyarı (uzatma satışı fırsatı)
+Servis kaydı X gündür açık kalırsa sorumluya bildirim
+Teslim edildi ama imzalı tutanak yüklenmemiş kayıtların listesi
+Periyodik bakım tarihi yaklaşan cihazlar
+
+
+
+
+
+kont cafe isminde bir uygulama yazacağım.
+uygulama fairino robotlar ile sdk/ dizin üzerinden entegre çalışıyor olacak.
+ayrıca uygulama bir fast api servisi de çalıştırıyor olacak frontend üzerinden gelen request içeriğine göre robotun do/di sinyallerine okuma yazma işlemi yapacak.
+frontend katmanın kullanılacak olan json datasının listesi  ekteki ekran görüntüsünde olduğu gibidir.
+backend tarafına içeceğin tüm özellikleri gönderilecek.
+backend tarafı gelen dataya göre robotun DO/DI sinyallerini tetikleyecek.
+robot sdk entegrasyonu için sdk/ dizini içnde yer alacak olan ekteki robot.py ve setup.py kullanılabilir.
+robot tarafında kullanılacak sinyalleri isimlendir isimlendirilecek.
+
+boş bardaklar kahve makinesine besleme yapılırken makinenin iki adet kahve doldurma haznesi mevcut.
+frontenden gelen sipariş talebine göre robot boş bardağı alıp kullanılmayan müsait durumdaki hazneye besleme yapacak. bu duruma göre backend yazılımı haznelerin dolu veya boş durumlarını takip edecek.
+
+kabaca hareket mekanizması söyle olacak.
+
+frontend içecek talebi gönderir
+backend boş hazne kontrolü yapar (haznelere besleme yapılan ürünlerin bir timer değeri olacak bundan dolayı boşalacak hazne bilgisi önceden kontrol edilmiş olur. hazneler dolu olsa bile içecek siparişi geldiği zaman backend sistemi robotu boş olan hazneye yönlendirir)
+robot etiketlenmiş boş bardağı alır ve müsait olan hazneye besleme yapar.
+robot besleme işlemi tamamlandıktan sonra DI sinyallerinden birini tetikler. backend bu sinyali kontrol eder. (bu sinyal backend tarafında boş bardak x nolu hazneye besleme yapıldı. mesajını üretir)
+robot besleme yapılan haznenin dokunmatik ekranında ilgili içeceği tuşlar. DI sinyallerinden birini tetikler ve backend bu sinyali kontrol eder ve içecek için belirtilmiş timer tetiklenir. (bu sinyal backend tarafında içecek başlatıldı mesajını üretir)
+backend hangi haznede hangi içecek olduğunu canlı takip eder ve timerlar buna göre çalışır timer bittiği zaman backend robota hangi hazneye gitmesi gerektiğini DO/DI sinyallerini tetikleyerek yönlendirir.
+robot ilgili hazneden ürünü alır kapak kapatma noktasına ürünü bırakır ve DI sinyallerinden birini tetikler.backend bu sinyali kontrol eder (bu sinyal içecek kapağı kapatmak için bekleniyor mesajını üretir)
+kapak kapma işlemi tamamlandıktan sonra robot tekrar DI sinyallerinden birini tetikler. backend bu sinyali takip eder (bu sinyal içecek teslim edildi mesajını üretir.)
+
+bu işlemler yapılırken backend tarafına gönderilen her içecek talebi kuyruğa alınıp robot sinyalleri ve yönlendirmeleri bu şekilde yapılmalıdır.
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,9 @@
+# 5173 portu kim dinliyor kontrol et
+netstat -ano | findstr :5173
+
+
+# taskkill
+taskkill /F /PID PID_NO
+
+# ip adresi ve port belirleyerek run
+npm run dev -- --host 192.168.1.40 --port 5173
