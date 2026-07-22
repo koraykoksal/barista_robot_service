@@ -1,77 +1,113 @@
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-  /* background-color: '#EBF4F6'; */
-}
+/* ==========================================================================
+   index.css — kiosk taban stilleri
 
+   DEĞİŞENLER:
+     • Önceki sürüm :root üzerinde koyu zemin ve "color-scheme: light dark"
+       tanımlıyordu; bu, MUI açık temasının üzerine biniyordu. Kaldırıldı.
+     • Dokunmatik kiosk davranışları eklendi: metin seçimi kapalı,
+       dokunma parlaması yok, çift dokunuşla yakınlaşma yok, lastik
+       bant kaydırma yok.
+     • Renkler tek yerden: theme.js. Buradaki CSS değişkenleri yalnızca
+       MUI dışındaki ham elemanlar (CupFill katmanları) için.
+   ========================================================================== */
 
- :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
+:root {
+  /* theme.js ile aynı değerler — ham CSS'in erişebilmesi için */
+  --paper:   #E7DFD4;
+  --sand:    #D5CCB9;
+  --ink:     #17160F;
+  --ink-2:   #5C574A;
+  --red:     #E5352A;
+  --lime:    #D9DA96;
+  --machine: #15140D;
+  --rule:    rgba(23, 22, 15, 0.14);
 
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
+  color-scheme: light;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/*
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
 }
-a:hover {
-  color: #535bf2;
+
+html,
+body,
+#root {
+  height: 100%;
 }
 
 body {
-  margin: 0;
-  display: flex;
-  place-items: center;
-  min-width: 320px;
-  min-height: 100vh;
+  background: var(--sand);
+  color: var(--ink);
 }
 
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
+/* ─────────────────────────────────────────────
+   KİOSK DAVRANIŞLARI
+
+   Dokunmatik panelde bu dört şey sürekli kaza yapar:
+     1. uzun basınca metin seçilir ve mavi seçim çıkar
+     2. her dokunuşta gri bir parlama görünür
+     3. çift dokunuş sayfayı yakınlaştırır
+     4. listenin sonunda sayfa lastik gibi esner
+   ───────────────────────────────────────────── */
+
+body {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
+  overscroll-behavior: none;
 }
 
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
-  cursor: pointer;
-  transition: border-color 0.25s;
-}
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
+/* Metin girişleri istisna — isim yazma alanı seçilebilir olmalı */
+input,
+textarea {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
+/* Kiosk modunda imleç görünmesin.
+   Fare ile geliştirme yaparken bu bloğu geçici olarak kapatın. */
+@media (hover: none) and (pointer: coarse) {
+  * {
+    cursor: none !important;
   }
-  a:hover {
-    color: #747bff;
+}
+
+/* Kaydırma çubuğu — dokunmatikte ince ve sessiz */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(23, 22, 15, 0.22);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Klavye ile gezinenler için görünür odak */
+:focus-visible {
+  outline: 3px solid var(--red);
+  outline-offset: 2px;
+}
+
+/* Hareket hassasiyeti olan kullanıcılar */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
-  button {
-    background-color: #f9f9f9;
-  }
-} */
+}

@@ -1,20 +1,18 @@
 """
-app.py  —  v2 modüler yapı
+app.py — uygulama girişi
 
-Bu dosya artık sadece:
-  • FastAPI uygulaması oluşturur
-  • CORS tanımlar
-  • lifespan (startup / shutdown) yönetir
-  • Router'ları bağlar
+Görevi yalnızca:
+  • FastAPI uygulamasını oluşturmak
+  • CORS tanımlamak
+  • lifespan (startup / shutdown) yönetmek
+  • router'ları bağlamak
 
-İş mantığı şu dosyalara taşındı:
-  config.py         → sabitler (IP, port, token, timer, ...)
-  services.py       → singleton servis nesneleri (robot, coffee, monitor, ...)
-  order_utils.py    → loglama, timer, hata açıklama, sinyal temizleme
-  order_service.py  → tüm sipariş akışı (14 adım)
-  routers/order.py  → /order_standart, /order/status, /check_beverage, ...
-  routers/machine.py→ /machine/status, /machine/info, /read_do, ...
-  routers/stock.py  → /stock/status, /stock/refill, /stock/thresholds, ...
+KATMANLAR:
+  core/     → yapılandırma, veri, saf yardımcılar
+  service/  → cihaz istemcileri ve iş mantığı
+  route/    → HTTP uçları
+
+  Bağımlılık yönü tek yönlüdür:  route → service → core
 """
 
 import asyncio
@@ -23,13 +21,15 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-import __version__
-from services  import robot_mgr, coffee, monitor,syrup
-from database  import init_db, close_db
-from routers   import order as order_router
-from routers   import machine as machine_router
-from routers   import stock as stock_router
-from routers   import syrup as syrup_router
+from core import config
+from core.database import close_db, init_db
+from core.security import admin_protection_enabled
+from core.version import __version__
+from route import machine as machine_route
+from route import order as order_route
+from route import stock as stock_route
+from route import syrup as syrup_route
+from service.registry import monitor, robot_mgr, syrup
 
 
 # ══════════════════════════════════════════════
@@ -39,58 +39,46 @@ from routers   import syrup as syrup_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("=" * 60)
-    print(f"[STARTUP] WMF Coffee Service v{__version__.__version__} başlatılıyor...")
+    print(f"[STARTUP] WMF Coffee Service v{__version__} başlatılıyor...")
     print("=" * 60)
 
-    # Robot
+    config.validate()
+
     robot_mgr.start()
     print("[STARTUP] RobotManager başlatıldı.")
 
-    robot_ok = await asyncio.to_thread(_check_robot)
-    if not robot_ok:
-        print("[STARTUP] ⚠️  Robot bağlantısı kurulamadı — uygulama yine de başlatılıyor.")
+    robot_ok   = await asyncio.to_thread(_check_robot)
+    monitor_ok = await _check_monitor()
+    syrup_ok   = await _check_syrup()
 
-    # Kahve makinesi WS testi
-    # coffee_ok = await _check_coffee_ws()
-    # if not coffee_ok:
-    #     print("[STARTUP] ⚠️  Kahve makinesi WS bağlantısı kurulamadı — uygulama yine de başlatılıyor.")
-
-    # MachineMonitor
-    # await monitor.start()
-    # print("[STARTUP] ✅ MachineMonitor başlatıldı.")
-
-
-    # Surup Control
-    syrup_ok = await _check_syrup()
-    if not syrup_ok:
-        print("[STARTUP] ⚠️  Syrup Dispenser bağlantısı kurulamadı — uygulama yine de başlatılıyor.")
-
-
-    # MongoDB
     try:
         print("[STARTUP] MongoDB başlatılıyor...")
         await init_db()
+        db_ok = True
     except Exception as e:
         print(f"[STARTUP] ⚠️  MongoDB başlatma hatası (devam): {e}")
+        db_ok = False
 
-    # print("=" * 60)
-    # print(f"[STARTUP] ✅ Hazır.  Robot:{robot_ok} | Kahve:{coffee_ok}")
-    # print("=" * 60)
+    print("=" * 60)
+    print(f"[STARTUP] Robot:{robot_ok} | Monitor:{monitor_ok} | Syrup:{syrup_ok} | DB:{db_ok}")
+    print(f"[STARTUP] Yönetici koruması: {'AÇIK' if admin_protection_enabled() else 'KAPALI ⚠️'}")
+    print(f"[STARTUP] İzinli origin'ler: {config.CORS_ORIGINS}")
+    print("=" * 60)
 
     yield   # ← uygulama burada çalışır
 
-    # ── Shutdown ──────────────────────────────
+    # ══ SHUTDOWN ══════════════════════════════
     print("[SHUTDOWN] Servisler durduruluyor...")
 
-    # Aktif sipariş task iptal
-    from routers.order import _active_task, _active_task_lock
+    # Aktif sipariş varsa iptal et
     try:
-        async with _active_task_lock:
-            if _active_task and not _active_task.done():
+        async with order_route._active_task_lock:
+            task = order_route._active_task
+            if task and not task.done():
                 print("[SHUTDOWN] ⚠️  Aktif sipariş iptal ediliyor...")
-                _active_task.cancel()
+                task.cancel()
                 try:
-                    await asyncio.wait_for(asyncio.shield(_active_task), timeout=5.0)
+                    await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
                 except (asyncio.CancelledError, asyncio.TimeoutError):
                     pass
     except Exception as e:
@@ -110,7 +98,6 @@ async def lifespan(app: FastAPI):
 
     try:
         await close_db()
-        print("[SHUTDOWN] MongoDB kapatıldı.")
     except Exception as e:
         print(f"[SHUTDOWN] MongoDB hatası: {e}")
 
@@ -124,37 +111,37 @@ async def lifespan(app: FastAPI):
 def _check_robot() -> bool:
     try:
         robot_mgr._ensure_connected()
-        print("=" * 60)
-        print(f"[STARTUP] ✅ Robot bağlandı.")
-        print("=" * 60)
+        print("[STARTUP] ✅ Robot bağlandı.")
         return True
     except Exception as e:
         print(f"[STARTUP] ❌ Robot bağlantısı: {e}")
         return False
 
 
-async def _check_coffee_ws() -> bool:
+async def _check_monitor() -> bool:
+    """
+    MachineMonitor önceki sürümde yorum satırındaydı, ancak
+    order_service.py sipariş öncesi monitor.get_state() çağırıyor.
+    Başlatılmazsa durum sözlüğü boş kalır ve check_monitor_state
+    her siparişi "makine çevrimdışı" diye reddedebilir.
+    """
     try:
-        result = await coffee.connect_test()
-        if result.get("ok"):
-            print("=" * 60)
-            print(f"[STARTUP] ✅ Kahve makinesi WS bağlandı.")
-            print("=" * 60)
-        return bool(result.get("ok"))
+        await monitor.start()
+        print("[STARTUP] ✅ MachineMonitor başlatıldı.")
+        return True
     except Exception as e:
-        print(f"[STARTUP] ❌ Kahve makinesi WS: {e}")
+        print(f"[STARTUP] ❌ MachineMonitor: {e}")
         return False
-    
+
+
 async def _check_syrup() -> bool:
     try:
         result = await syrup.ping()
-        if result.get("ok"):
-            print("=" * 60)
-            print(f"[STARTUP] ✅ Syrup Dispenser bağlantısı OK.")
-            print("=" * 60)
-        return bool(result.get("ok"))
+        ok = bool(result.get("ok"))
+        print(f"[STARTUP] {'✅' if ok else '❌'} Syrup Dispenser.")
+        return ok
     except Exception as e:
-        print(f"❌ Syrup Dispenser : {e}")
+        print(f"[STARTUP] ❌ Syrup Dispenser: {e}")
         return False
 
 
@@ -163,38 +150,30 @@ async def _check_syrup() -> bool:
 # ══════════════════════════════════════════════
 
 app = FastAPI(
-    title   = "WMF Coffee Service API",
-    version = __version__.__version__,
-    lifespan= lifespan,
+    title    = "WMF Coffee Service API",
+    version  = __version__,
+    lifespan = lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins     = ["*"],
+    allow_origins     = config.CORS_ORIGINS,
     allow_credentials = False,
     allow_methods     = ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allow_headers     = ["*"],
-    expose_headers    = ["*"],
+    allow_headers     = ["Content-Type", "X-Admin-Token"],
 )
 
+app.include_router(order_route.router)
+app.include_router(machine_route.router)
+app.include_router(stock_route.router)
+app.include_router(syrup_route.router)
 
-# ══════════════════════════════════════════════
-# ROUTER BAĞLANTILARI
-# ══════════════════════════════════════════════
-
-app.include_router(order_router.router)
-app.include_router(machine_router.router)
-app.include_router(stock_router.router)
-app.include_router(syrup_router.router)
-
-
-# ══════════════════════════════════════════════
-# KÖKK ENDPOINT
-# ══════════════════════════════════════════════
 
 @app.get("/", status_code=200)
 async def root():
+    """Sağlık kontrolü — Docker HEALTHCHECK ve kiosk bu ucu kullanır."""
     return {
-        "response": "Coffee Service is running.",
-        "version" : __version__.__version__,
+        "response"       : "Coffee Service is running.",
+        "version"        : __version__,
+        "admin_protected": admin_protection_enabled(),
     }

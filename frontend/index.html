@@ -1,10 +1,44 @@
 <!doctype html>
-<html lang="en">
+<html lang="tr">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="./public/robotic-arm.png" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Logorob</title>
+    <link rel="icon" type="image/png" href="/robotic-arm.png" />
+
+    <!--
+      viewport-fit=cover      : çentikli/yuvarlak köşeli panellerde tam ekran
+      maximum-scale=1         : dokunmatik kioskta parmakla yakınlaştırmayı engeller
+      user-scalable=no        : aynı amaç, eski tarayıcılar için
+    -->
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+
+    <meta name="theme-color" content="#D5CCB9" />
+    <meta name="description" content="Robot barista istasyonu — içecek seçin, hazırlanışını izleyin." />
+
+    <!-- Tarayıcının kendi arayüzünü gizle (Android/iOS tam ekran kısayolu) -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+
+    <!--
+      İKİ TİPOGRAFİK SES:
+        Anton + Inter Tight → insana hitap eden her şey
+        JetBrains Mono      → makinenin ürettiği her şey (durum, kod)
+
+      ⚠️  ÇEVRİMDIŞI KİOSK: Bu fontlar Google Fonts'tan yükleniyor.
+      Kiosk internetsiz çalışacaksa fontlar yüklenmez ve sistem
+      yazı tiplerine düşer — düzen bozulmaz ama karakter kaybolur.
+      Kalıcı çözüm: font dosyalarını public/fonts/ altına indirip
+      aşağıdaki <link> satırını yerel bir @font-face tanımıyla değiştirin.
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Anton&family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <title>Logorob — Barista</title>
   </head>
   <body>
     <div id="root"></div>

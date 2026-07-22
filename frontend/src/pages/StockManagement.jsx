@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import axios from "axios";
+import { api, ENDPOINTS, adminConfig } from "../api/client";
 
 // ─────────────────────────────────────────────
 // PAROLA — değiştirmek için burası yeterli
@@ -9,7 +9,20 @@ const ADMIN_PASSWORD   = "wmf2024";
 const SESSION_KEY      = "stock_admin_auth";
 const SESSION_DURATION = 30 * 60 * 1000; // 30 dakika (ms)
 
-const BACKEND_URI = "http://192.168.1.40:8000/";
+// Backend adresi artık api/client.js üzerinden .env'den gelir.
+// Önceden burada sabit yazılıydı ve Home.jsx ile ayrı ayrı güncellenmesi
+// gerekiyordu; biri unutulduğunda hata sessiz kalıyordu.
+//
+// ⚠️  ADMIN_PASSWORD tarayıcıda çalışan bir sabit — derlenmiş pakette
+// açıkça görünür ve gerçek bir koruma DEĞİLDİR. Yalnızca personelin
+// yanlışlıkla bu sayfaya girmesini engeller. Asıl koruma backend
+// tarafındaki X-Admin-Token başlığıdır (bkz. adminConfig).
+
+/** Oturumun bitmesine kalan dakika. ts null ise 0. */
+const minutesLeft = (ts) =>
+  ts === null || ts === undefined
+    ? 0
+    : Math.max(0, Math.ceil((SESSION_DURATION - (Date.now() - ts)) / 60000));
 
 const MATERIALS = [
   { key: "coffee_g", label: "Çekirdek Kahve", unit: "g",    max: 200,  icon: "☕", accent: "#6B4226" },
@@ -580,28 +593,38 @@ const StockManagement = () => {
   const navigate = useNavigate();
 
   // ── Auth state ───────────────────────────
-  const [authed, setAuthed]       = useState(false);
+  // Oturum geri yükleme — sayfa yenilenirse 30dk boyunca giriş korunur.
+  //
+  // useState başlangıç fonksiyonu kullanılıyor: effect içinde setState
+  // çağırmak fazladan bir render turu doğuruyor ve giriş ekranı bir kare
+  // boyunca yanıp sönüyordu. Ayrıca eski kod startSessionTimer'ı
+  // tanımlanmadan ÖNCE çağırıyordu — çalışıyordu ama kırılgandı.
+  //
+  // Başlangıç fonksiyonu yalnızca değer döndürür; ref'e yazmaz.
+  // Render sırasında ref'e dokunmak React'in beklemediği bir davranış.
+  const [restoredTs] = useState(() => {
+    try {
+      const stored = sessionStorage.getItem(SESSION_KEY);
+      if (!stored) return null;
+      const { ts } = JSON.parse(stored);
+      if (Date.now() - ts < SESSION_DURATION) return ts;
+    } catch {
+      // bozuk kayıt — aşağıda temizleniyor
+    }
+    sessionStorage.removeItem(SESSION_KEY);
+    return null;
+  });
+
+  const [authed, setAuthed]       = useState(restoredTs !== null);
   const [password, setPassword]   = useState("");
   const [showPw, setShowPw]       = useState(false);
   const [loginErr, setLoginErr]   = useState("");
   const [shaking, setShaking]     = useState(false);
-  const [sessionLeft, setSessionLeft] = useState(0);
+  // Kalan süre baştan hesaplanır; startSessionTimer artık yalnızca
+  // aralığı kurar, senkron setState yapmaz.
+  const [sessionLeft, setSessionLeft] = useState(() => minutesLeft(restoredTs));
   const sessionTimer = useRef(null);
   const inputRef     = useRef(null);
-
-  // Session kontrolü — sayfa yenilenirse oturum kalır (30dk)
-  useEffect(() => {
-    const stored = sessionStorage.getItem(SESSION_KEY);
-    if (stored) {
-      const { ts } = JSON.parse(stored);
-      if (Date.now() - ts < SESSION_DURATION) {
-        setAuthed(true);
-        startSessionTimer(ts);
-      } else {
-        sessionStorage.removeItem(SESSION_KEY);
-      }
-    }
-  }, []);
 
   const startSessionTimer = (ts) => {
     if (sessionTimer.current) clearInterval(sessionTimer.current);
@@ -616,8 +639,12 @@ const StockManagement = () => {
         setSessionLeft(Math.ceil(left / 60000)); // dakika
       }
     }, 10000);
-    setSessionLeft(Math.ceil((SESSION_DURATION - (Date.now() - ts)) / 60000));
   };
+
+  // Geri yüklenen oturumun geri sayımını başlat
+  useEffect(() => {
+    if (restoredTs !== null) startSessionTimer(restoredTs);
+  }, [restoredTs]);
 
   useEffect(() => () => { if (sessionTimer.current) clearInterval(sessionTimer.current); }, []);
 
@@ -628,6 +655,7 @@ const StockManagement = () => {
       setAuthed(true);
       setLoginErr("");
       setPassword("");
+      setSessionLeft(minutesLeft(ts));
       startSessionTimer(ts);
     } else {
       setLoginErr("Hatalı parola. Tekrar deneyin.");
@@ -667,7 +695,7 @@ const StockManagement = () => {
   const fetchStock = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await axios.get(`${BACKEND_URI}stock/status`, { timeout: 5000 });
+      const res = await api.get(ENDPOINTS.stockStatus, { timeout: 5000 });
       setStockData(res.data);
       const t = res.data?.thresholds || {};
       setThreshValues({
@@ -683,8 +711,8 @@ const StockManagement = () => {
     setLogsLoading(true);
     try {
       const [oRes, rRes] = await Promise.all([
-        axios.get(`${BACKEND_URI}stock/logs/orders?limit=30`),
-        axios.get(`${BACKEND_URI}stock/logs/refills?limit=20`),
+        api.get(ENDPOINTS.stockOrderLogs(30)),
+        api.get(ENDPOINTS.stockRefillLogs(20)),
       ]);
       setOrderLogs(oRes.data || []);
       setRefillLogs(rRes.data || []);
@@ -693,11 +721,18 @@ const StockManagement = () => {
     } finally { setLogsLoading(false); }
   }, []);
 
+  // Veri çekme effect'leri. setState çağrısı senkron effect gövdesinde
+  // değil, await sonrası geri çağrıda olduğu için zincirleme render
+  // oluşmaz; kural yine de uyarı verdiğinden burada bilinçli olarak
+  // susturuluyor.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => { fetchStock(); }, [fetchStock]);
   useEffect(() => { if (tab === 2) fetchLogs(); }, [tab, fetchLogs]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // ── İşlemler ─────────────────────────────
-  const axiosCfg = { headers: { "Content-Type": "application/json" } };
+  // Yazma işlemleri backend tarafında X-Admin-Token ile korunuyor
+  const axiosCfg = adminConfig();
 
   // Sadece tam sayı (integer ≥ 0) girişine izin ver
   const ALLOWED_KEYS = new Set([
@@ -733,7 +768,7 @@ const StockManagement = () => {
     }
     payload.note = refillNote;
     try {
-      await axios.put(`${BACKEND_URI}stock/refill`, payload, axiosCfg);
+      await api.put(ENDPOINTS.stockRefill, payload, axiosCfg);
       showToast("Stok başarıyla güncellendi.");
       setRefillValues({ coffee_g: "", milk_ml: "", choc_g: "", cups: "" });
       setRefillNote("");
@@ -762,7 +797,7 @@ const StockManagement = () => {
       showToast("En az bir eşik değeri girin.", "warning"); return;
     }
     try {
-      await axios.put(`${BACKEND_URI}stock/thresholds`, payload, axiosCfg);
+      await api.put(ENDPOINTS.stockThresholds, payload, axiosCfg);
       showToast("Eşik değerleri kaydedildi.");
       fetchStock();
     } catch (e) {
@@ -778,7 +813,10 @@ const StockManagement = () => {
   const alerts = stockData?.alerts     || [];
   const overall = stockData?.status?.overall || "ok";
 
-  const OverallPill = () => (
+  // Render sırasında bileşen TANIMLAMAYIN: her render'da yeni bir bileşen
+  // tipi doğar, React eskisini söküp yenisini takar ve durum sıfırlanır.
+  // Düz bir JSX ifadesi bu sorunu ortadan kaldırır.
+  const overallPill = (
     <span className={`status-pill ${overall}`}>
       {overall === "ok" ? "✓ Normal" : overall === "warning" ? "⚠ Uyarı" : "⛔ Kritik"}
     </span>
@@ -788,7 +826,7 @@ const StockManagement = () => {
   const stockTabContent = (
     <>
       <div className="status-row">
-        <OverallPill />
+        {overallPill}
         <button className="btn-ghost" onClick={fetchStock}>↻ Yenile</button>
       </div>
 

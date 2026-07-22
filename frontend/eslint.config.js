@@ -5,7 +5,11 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  // dist     → derleme çıktısı
+  // _archive → kullanılmayan eski sayfa varyasyonları. Hiçbir yerden
+  //            import edilmiyorlar, derlemeye de girmiyorlar; lint
+  //            çıktısını gereksiz yere kirletmesinler.
+  globalIgnores(['dist', 'src/pages/_archive']),
   {
     files: ['**/*.{js,jsx}'],
     extends: [

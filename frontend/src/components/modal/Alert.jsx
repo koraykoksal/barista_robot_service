@@ -1,70 +1,81 @@
-import Modal from "@mui/material/Modal";
-import Box from "@mui/material/Box";
-import { Typography, Container, Button } from "@mui/material";
+import { Box, Button, Modal, Stack, Typography } from "@mui/material";
+import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 
-const style = {
-    position: "absolute",
-    top: "50%",
-    left: "50%",
-    transform: "translate(-50%, -50%)",
-    width: "45%",
-    bgcolor: "background.paper",
-    boxShadow: 24,
-    borderRadius: 3,
-    p: 4,
+import { palette } from "../../theme";
+
+/**
+ * Alert — hata bildirimi
+ *
+ * DEĞİŞENLER:
+ *   • Açık temaya taşındı, genişlik dokunmatik panele göre ayarlandı
+ *   • "OK" sabit İngilizceydi → dil desteği
+ *   • Sipariş hatalarında kullanıcıya ne yapacağını söyleyen bir
+ *     alt satır eklendi; ekranda tek başına duran hata metni
+ *     müşteriye bir şey ifade etmiyordu
+ */
+
+const LABELS = {
+  TR: { title: "Bir sorun oluştu", ok: "Tamam", hint: "Tekrar deneyebilir veya personelden yardım isteyebilirsiniz." },
+  EN: { title: "Something went wrong", ok: "OK", hint: "You can try again or ask a staff member for help." },
 };
 
-const Alert = ({ openAlert, handleCloseAlert, alertData, setAlertData }) => {
-    const { title, message, code, errorId } = alertData || {};
+const Alert = ({ openAlert, handleCloseAlert, alertData, setAlertData, language = "TR" }) => {
+  const { title, message } = alertData || {};
+  const t = LABELS[language] ?? LABELS.TR;
 
-    const closeAndReset = () => {
-        handleCloseAlert();
-        if (setAlertData) {
-            setAlertData({
-                title: "",
-                message: "",
-                code: null,
-                errorId: null,
-            });
-        }
-    };
+  const closeAndReset = () => {
+    handleCloseAlert();
+    setAlertData?.({ title: "", message: "", code: null, errorId: null });
+  };
 
-    return (
-        <Modal keepMounted open={openAlert} onClose={closeAndReset}>
-            <Box sx={style}>
-                <Container sx={{ display: "flex", flexDirection: "column", gap: 2 }} maxWidth="sm">
+  return (
+    <Modal open={Boolean(openAlert)} onClose={closeAndReset}>
+      <Box
+        sx={{
+          position: "absolute",
+          top: "50%",
+          left: "50%",
+          transform: "translate(-50%, -50%)",
+          width: { xs: "92vw", sm: 520 },
+          bgcolor: "background.paper",
+          borderRadius: 1,
+          boxShadow: "0 24px 60px rgba(23, 22, 15, 0.3)",
+          p: 4,
+          outline: "none",
+          // Sol kenarda kırmızı şerit — hata olduğu tek bakışta anlaşılsın
+          borderLeft: `5px solid ${palette.red}`,
+        }}
+      >
+        <Stack direction="row" spacing={1.5} alignItems="center" mb={2}>
+          <ErrorOutlineIcon sx={{ color: palette.red, fontSize: 30 }} />
+          <Typography variant="h3">{title || t.title}</Typography>
+        </Stack>
 
-                    <Typography variant="h6" color="black">
-                        {title || "Warning"}
-                    </Typography>
+        {message && (
+          <Typography
+            sx={{
+              fontFamily: "var(--mono)",
+              fontSize: 14,
+              lineHeight: 1.7,
+              color: "text.secondary",
+              whiteSpace: "pre-line",   // backend "\n" içeren mesajlar gönderiyor
+              mb: 2,
+            }}
+          >
+            {message}
+          </Typography>
+        )}
 
-                    {message ? (
-                        <Typography variant="body1" fontSize={20} color="gray">
-                            {message}
-                        </Typography>
-                    ) : null}
+        <Typography variant="caption" display="block" mb={3}>
+          {t.hint}
+        </Typography>
 
-                    {/* {(code !== null && code !== undefined) ? (
-                        <Typography variant="caption" color="gray">
-                            returnvalue: {code}
-                        </Typography>
-                    ) : null} */}
-
-                    {/* {(errorId !== null && errorId !== undefined) ? (
-                        <Typography variant="caption" color="gray">
-                            errorId: {errorId}
-                        </Typography>
-                    ) : null} */}
-
-                    <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1, mt: 2 }}>
-                        <Button variant="contained" onClick={closeAndReset}>
-                            OK
-                        </Button>
-                    </Box>
-                </Container>
-            </Box>
-        </Modal>
-    );
+        <Button fullWidth variant="contained" color="secondary" onClick={closeAndReset}>
+          {t.ok}
+        </Button>
+      </Box>
+    </Modal>
+  );
 };
 
 export default Alert;

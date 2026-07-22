@@ -1,28 +1,29 @@
-// import mug3               from "../assets/mug3.png";
-// import vanilla_ice_cream  from "../assets/vanilla_ice_cream.png";
-// import chocolate_ice_cream from "../assets/chocolate_ice_cream.png";
-// import mix_ice_cream      from "../assets/mix_ice_cream.png";
-// import springles          from "../assets/springles.png";
-// import badem_kiriklari    from "../assets/badem_kiriklari.png";
-// import findik_kiriklari   from "../assets/findik_kiriklari.png";
-// import vanalla_syrup      from "../assets/vanalla_syrup.png";
-// import caramel_syrup      from "../assets/caramel_syrup.png";
-// import chocolate_syrup    from "../assets/chocolate_syrup.png";
-// import white_chocolate_syrup from "../assets/white_chocolate_syrup.png";
-
-
-import mug3               from "../assets/mug3.svg";
-import vanilla_ice_cream  from "../assets/vanilla_ice_cream.webp";
-import chocolate_ice_cream from "../assets/chocolate_ice_cream.webp";
-import mix_ice_cream      from "../assets/mix_ice_cream.webp";
-import springles          from "../assets/springles.jpg";
+import hot_cup            from "../assets/hot_cup.webp";
+import ice_cream_cup      from "../assets/ice_cream.webp";
+import ice_cup            from "../assets/ice_cup.webp";
+import springles          from "../assets/springles.webp";
 import badem_kiriklari    from "../assets/badem_kiriklari.webp";
-import findik_kiriklari   from "../assets/findik_kiriklari.jpg";
+import findik_kiriklari   from "../assets/findik_kiriklari.webp";
 import vanilla_syrup      from "../assets/vanilla_syrup.png";
 import caramel_syrup      from "../assets/caramel_syrup.png";
 import chocolate_syrup    from "../assets/chocolate_syrup.png";
 import white_chocolate_syrup from "../assets/white_chocolate_syrup.png";
 
+
+
+// ─────────────────────────────────────────────
+// BARDAK GÖRSELİ
+//
+// Kahve içeceklerinin görseli tek tek yazılmaz; temperature alanından
+// türetilir. Yeni bir içecek eklerken image alanı vermeniz gerekmez —
+// temperature: "iced" yazmanız yeterli, soğuk bardak otomatik gelir.
+//
+// Fotoğrafların arka planı #E7DFD4 ve tema paper rengiyle birebir aynı;
+// bu yüzden kartlara çerçevesiz oturuyorlar. Görselleri değiştirirseniz
+// theme.js içindeki paper tonunu da eşitleyin, yoksa kartlarda kutu izi
+// belirir.
+// ─────────────────────────────────────────────
+export const cupImage = (temperature) => (temperature === "iced" ? ice_cup : hot_cup);
 
 // ─────────────────────────────────────────────
 // Dil seçimine göre isim ve açıklama okumak için yardımcı
@@ -80,7 +81,8 @@ export const beverages = {
             milk          : false,
             caffeine_TR   : "Yüksek",
             caffeine_EN   : "High",
-            image         : mug3,
+            temperature   : "hot",
+            image         : cupImage("hot"),
             published     : true,
             type          : "coffee",
             price         : "0,01",
@@ -96,7 +98,8 @@ export const beverages = {
             milk          : false,
             caffeine_TR   : "Orta",
             caffeine_EN   : "Medium",
-            image         : mug3,
+            temperature   : "hot",
+            image         : cupImage("hot"),
             published     : true,
             type          : "coffee",
             price         : "0,01",
@@ -112,7 +115,8 @@ export const beverages = {
             milk          : true,
             caffeine_TR   : "Orta",
             caffeine_EN   : "Medium",
-            image         : mug3,
+            temperature   : "hot",
+            image         : cupImage("hot"),
             published     : false,
             type          : "coffee",
             price         : "0,01",
@@ -128,7 +132,8 @@ export const beverages = {
             milk          : true,
             caffeine_TR   : "Orta",
             caffeine_EN   : "Medium",
-            image         : mug3,
+            temperature   : "hot",
+            image         : cupImage("hot"),
             published     : false,
             type          : "coffee",
             price         : "0,01",
@@ -145,7 +150,8 @@ export const beverages = {
             milkChocolate : false,
             caffeine_TR   : "Yüksek",
             caffeine_EN   : "High",
-            image         : mug3,
+            temperature   : "hot",
+            image         : cupImage("hot"),
             published     : false,
             type          : "coffee",
             price         : "0,01",
@@ -162,7 +168,8 @@ export const beverages = {
         //     milkChocolate : true,
         //     caffeine_TR   : "Düşük",
         //     caffeine_EN   : "Low",
-        //     image         : mug3,
+        //     temperature   : "hot",
+        //     image         : cupImage("hot"),
         //     published     : false,
         //     type          : "coffee",
         //     price         : "0,01",
@@ -176,7 +183,7 @@ export const beverages = {
             description_TR: "Süt, krema, şeker ve vanilya özüyle yapılan klasik ve kremsi bir dondurma.",
             description_EN: "A classic and creamy vanilla-flavored ice cream made with milk, cream, sugar, and vanilla extract.",
             milk          : true,
-            image         : vanilla_ice_cream,
+            image         : ice_cream_cup,
             published     : true,
             type          : "ice_cream",
             price         : "0,01",
@@ -187,7 +194,7 @@ export const beverages = {
             description_TR: "Süt, krema, şeker ve çikolatayla yapırlanan zengin bir dondurma.",
             description_EN: "A rich and indulgent chocolate-flavored ice cream made with milk, cream, sugar, and chocolate.",
             milk          : true,
-            image         : chocolate_ice_cream,
+            image         : ice_cream_cup,
             published     : true,
             type          : "ice_cream",
             price         : "0,01",
@@ -198,7 +205,7 @@ export const beverages = {
             description_TR: "Farklı tatların tek bir kasede bir araya geldiği lezzetli bir dondurma.",
             description_EN: "A delightful blend of different flavors in a single scoop of ice cream.",
             milk          : true,
-            image         : mix_ice_cream,
+            image         : ice_cream_cup,
             published     : true,
             type          : "ice_cream",
             price         : "0,01",
@@ -211,6 +218,7 @@ export const beverages = {
 // ─────────────────────────────────────────────
 export const souces = [
     {
+        id           : "sprinkles",
         name_TR      : "Renkli Süsler",
         name_EN      : "Sprinkles",
         description_TR: "Dondurmana eğlenceli ve şenlikli bir dokunuş katan renkli ve tatlı süsler.",
@@ -220,6 +228,7 @@ export const souces = [
         price        : "0,01",
     },
     {
+        id           : "almonds",
         name_TR      : "Badem Kırıkları",
         name_EN      : "Crushed Almonds",
         description_TR: "Dondurmana hoş bir doku ve lezzet katan çıtır badem parçaları.",
@@ -229,6 +238,7 @@ export const souces = [
         price        : "0,01",
     },
     {
+        id           : "hazelnuts",
         name_TR      : "Fındık Kırıkları",
         name_EN      : "Crushed Hazelnuts",
         description_TR: "Dondurmana hoş bir doku ve lezzet katan çıtır fındık parçaları.",
@@ -244,6 +254,7 @@ export const souces = [
 // ─────────────────────────────────────────────
 export const syrups = [
     {
+        id           : "vanilla",
         name_TR      : "Vanilya",
         name_EN      : "Vanilla",
         description_TR: "Dondurmana klasik bir lezzet katan tatlı ve kremsi vanilya şurubu.",
@@ -253,6 +264,7 @@ export const syrups = [
         price        : "0,01",
     },
     {
+        id           : "caramel",
         name_TR      : "Karamel",
         name_EN      : "Caramel",
         description_TR: "Dondurmana zengin bir lezzet katan tatlı ve tereyağlı karamel şurubu.",
@@ -262,6 +274,7 @@ export const syrups = [
         price        : "0,01",
     },
     {
+        id           : "chocolate",
         name_TR      : "Çikolata",
         name_EN      : "Chocolate",
         description_TR: "Dondurmana lüks bir lezzet katan zengin çikolata şurubu.",
@@ -271,6 +284,7 @@ export const syrups = [
         price        : "0,01",
     },
     {
+        id           : "white_chocolate",
         name_TR      : "Beyaz Çikolata",
         name_EN      : "White Chocolate",
         description_TR: "Dondurmana zengin bir lezzet katan tatlı ve kremsi beyaz çikolata şurubu.",
@@ -278,5 +292,103 @@ export const syrups = [
         image        : white_chocolate_syrup,
         published    : true,
         price        : "0,01",
+    },
+];
+
+// ─────────────────────────────────────────────
+// İLAVE (şurup / sos) ARAMA
+//
+// DÜZELTİLEN HATA:
+//   Bu kayıtlarda name_TR ve name_EN vardı ama `name` YOKTU.
+//   Arayüz option.name okuduğu için değer undefined geliyordu ve
+//   iki ayrı hataya yol açıyordu:
+//
+//     1. selected.includes(undefined) her seçenek için true döndüğü
+//        için tek şurup seçilince HEPSİ seçili görünüyordu.
+//     2. Sepette extras.find(e => e.name === undefined) dizinin ilk
+//        elemanıyla eşleşiyor, yani seçilen şurup yerine hep
+//        "Renkli Süsler" yazıyordu.
+//
+//   Her kayda dile bağlı olmayan kalıcı bir `id` eklendi; arayüz
+//   artık isim yerine bunu taşıyor.
+// ─────────────────────────────────────────────
+
+/** Tüm ilaveler tek listede — sepet ve detay ekranı buradan arar */
+export const allExtras = [...souces, ...syrups];
+
+/** id → kayıt. Bulunamazsa null. */
+export const findExtra = (id) => allExtras.find((e) => e.id === id) ?? null;
+
+/** İlavenin görünen adı */
+export const extraName = (id, lang = "TR") => {
+    const item = findExtra(id);
+    return item ? (item[`name_${lang}`] ?? item.name_TR) : String(id ?? "");
+};
+
+
+// ─────────────────────────────────────────────
+// ÇEVRİMDIŞI DEMO — SOĞUK İÇECEKLER
+//
+// Bu kayıtlar YALNIZCA çevrimdışı test modunda (VITE_OFFLINE=true)
+// menüye eklenir; üretimde görünmezler.
+//
+// Neden ayrı duruyorlar: makinedeki gerçek soğuk içecek buton
+// numaralarını bilmiyoruz. Uydurulmuş bir ButtonNumber ile canlıya
+// çıkmak yanlış içeceğin hazırlanmasına yol açar. 900'lü numaralar
+// bilinçli olarak makinede karşılığı olmayan aralıktan seçildi.
+//
+// Gerçek soğuk içecekleri eklerken: numaraları makinenin
+// getBeverageButtonList çıktısından doğrulayın, kaydı yukarıdaki
+// drinks listesine taşıyın ve temperature: "iced" yazın — görsel
+// kendiliğinden soğuk bardağa döner.
+// ─────────────────────────────────────────────
+export const demoIcedDrinks = [
+    {
+        ButtonNumber  : 901,
+        Name_TR       : "Iced Americano",
+        Name_EN       : "Iced Americano",
+        description_TR: "Buz üzerine demlenen espresso ve soğuk suyla hazırlanan ferahlatıcı bir kahve.",
+        description_EN: "Espresso poured over ice and topped with cold water for a refreshing finish.",
+        RecipeNumber  : 901,
+        milk          : false,
+        caffeine_TR   : "Orta",
+        caffeine_EN   : "Medium",
+        temperature   : "iced",
+        image         : cupImage("iced"),
+        published     : true,
+        type          : "coffee",
+        price         : "0,01",
+    },
+    {
+        ButtonNumber  : 902,
+        Name_TR       : "Iced Latte",
+        Name_EN       : "Iced Latte",
+        description_TR: "Soğuk süt ve buz üzerine eklenen espresso ile hazırlanan yumuşak içimli kahve.",
+        description_EN: "Espresso over cold milk and ice, smooth and lightly sweet.",
+        RecipeNumber  : 902,
+        milk          : true,
+        caffeine_TR   : "Orta",
+        caffeine_EN   : "Medium",
+        temperature   : "iced",
+        image         : cupImage("iced"),
+        published     : true,
+        type          : "coffee",
+        price         : "0,01",
+    },
+    {
+        ButtonNumber  : 903,
+        Name_TR       : "Cold Brew",
+        Name_EN       : "Cold Brew",
+        description_TR: "Uzun süre soğuk suda demlenen, düşük asitli ve yoğun aromalı kahve.",
+        description_EN: "Slow-steeped in cold water for a low-acidity, deeply aromatic cup.",
+        RecipeNumber  : 903,
+        milk          : false,
+        caffeine_TR   : "Yüksek",
+        caffeine_EN   : "High",
+        temperature   : "iced",
+        image         : cupImage("iced"),
+        published     : true,
+        type          : "coffee",
+        price         : "0,01",
     },
 ];

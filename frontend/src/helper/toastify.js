@@ -1,83 +1,51 @@
 import { toast } from "react-toastify";
+import { palette, MONO } from "../theme";
 
-const toastStyles = {
-    style: {
-        backgroundColor: "#2e2720",
-        color: "#DEC39B",
-        border: "1px solid #DEC39B",
-        borderRadius: "8px",
-    },
-    progressStyle: {
-        backgroundColor: "#DEC39B",
-    },
+/**
+ * toastify.js — bildirim yardımcısı
+ *
+ * DEĞİŞENLER:
+ *   • Koyu tema renkleri (#2e2720 / #DEC39B) açık temaya taşındı
+ *   • Metin mono yazı tipiyle — makinenin sesi
+ *   • Dokunmatik için biraz daha büyük ve daha kısa süreli
+ */
+
+const base = {
+  position: "top-center",
+  autoClose: 2200,
+  hideProgressBar: false,
+  closeOnClick: true,
+  pauseOnHover: false,
+  draggable: false,
+  style: {
+    background: palette.paper,
+    color: palette.ink,
+    border: `1px solid ${palette.rule}`,
+    borderRadius: 3,
+    fontFamily: MONO,
+    fontSize: 14,
+    minHeight: 60,
+    boxShadow: "0 10px 28px rgba(23, 22, 15, 0.18)",
+  },
+  progressStyle: { background: palette.ink },
 };
 
-const defaultOptions = {
-    position: "top-center",
-    autoClose: 2500,
-    hideProgressBar: false,
-    closeOnClick: true,
-    pauseOnHover: false,
-    draggable: false,
-    ...toastStyles,
-};
+const accented = (color) => ({
+  ...base,
+  style: { ...base.style, borderLeft: `4px solid ${color}` },
+  progressStyle: { background: color },
+});
 
 export const showToast = {
+  addToCart: (name) => toast.success(`${name} sepete eklendi`, { ...accented(palette.green), icon: "🛒" }),
 
-    addToCart: (itemName) => {
-        toast.success(`${itemName} sepete eklendi!`, {
-            ...defaultOptions,
-            icon: "🛒",
-        });
-    },
+  removeFromCart: (name) => toast.info(`${name} çıkarıldı`, { ...accented(palette.ink2), icon: "🗑️" }),
 
-    removeFromCart: (itemName) => {
-        toast.info(`${itemName} sepetten çıkarıldı.`, {
-            ...defaultOptions,
-            icon: "🗑️",
-        });
-    },
+  success: (message) => toast.success(message, { ...accented(palette.green), icon: "✅" }),
 
-    success: (message) => {
-        toast.success(message, {
-            ...defaultOptions,
-            icon: "✅",
-        });
-    },
+  error: (message) => toast.error(message, { ...accented(palette.red), icon: "⛔" }),
 
-    error: (message) => {
-        toast.error(message, {
-            ...defaultOptions,
-            style: {
-                ...toastStyles.style,
-                border: "1px solid #c0392b",
-            },
-            progressStyle: {
-                backgroundColor: "#c0392b",
-            },
-            icon: "❌",
-        });
-    },
+  warning: (message) => toast.warning(message, { ...accented(palette.amber), icon: "⚠️" }),
 
-    warning: (message) => {
-        toast.warning(message, {
-            ...defaultOptions,
-            style: {
-                ...toastStyles.style,
-                border: "1px solid #F57C00",
-            },
-            progressStyle: {
-                backgroundColor: "#F57C00",
-            },
-            icon: "⚠️",
-        });
-    },
-
-    info: (message) => {
-        toast.info(message, {
-            ...defaultOptions,
-            icon: "ℹ️",
-        });
-    },
-
+  info: (message) => toast.info(message, { ...accented(palette.ink2), icon: "ℹ️" }),
 };
