@@ -29,9 +29,15 @@ COPY . .
 
 # ── Root olmayan kullanıcı ───────────────────────────────────
 # Konteyner içinde root çalıştırmak gereksiz bir risk.
-RUN useradd --create-home --uid 10001 appuser \
+# SQLite dosyası ve loglar konteyner içinde yazılabilir olmalı.
+# Kalıcılık için bu iki klasörü volume olarak bağlayın:
+#   docker run -v kiosk-data:/app/data -v kiosk-logs:/app/logs ...
+RUN mkdir -p /app/data /app/logs \
+ && useradd --create-home --uid 10001 appuser \
  && chown -R appuser:appuser /app
 USER appuser
+
+VOLUME ["/app/data", "/app/logs"]
 
 EXPOSE 8000
 

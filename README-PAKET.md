@@ -604,6 +604,250 @@ Sos fotoğrafları da WebP'ye alındı:
 
 ---
 
+## Ayarları derleme sonrası değiştirme — `public/config.js`
+
+Vite, `VITE_` değişkenlerini **derleme anında** pakete gömer. Bunun iki
+sonucu var:
+
+- dev sunucusu `.env`'i yalnızca açılışta okur (yeniden başlatma şart),
+- sahadaki `dist/` klasöründe değerler donmuştur — dondurmayı kapatmak
+  veya backend adresini değiştirmek için yeniden derleme gerekir.
+
+`public/config.js` ikisini de çözer. `index.html` bunu modül paketinden
+**önce** düz script olarak yükler, dolayısıyla senkron çalışır:
+
+```js
+window.__KIOSK_CONFIG__ = {
+  VITE_CATEGORY_ICECREAM: "false",
+  VITE_API_URL: "http://10.34.2.121:8000",
+};
+```
+
+Sunucudaki dosyayı düzenleyip sayfayı yenilemeniz yeterli — derleme
+yok, yeniden başlatma yok.
+
+**Öncelik sırası:** URL parametresi → `config.js` → `.env`
+
+Doğrulandı: `.env` boşken derlendi, sonra `dist/config.js` düzenlendi ve
+yeniden derleme yapılmadan dondurma kapandı, API adresi değişti.
+`?debug=1` panelindeki `kaynak` satırı hangisinin okunduğunu gösterir.
+
+---
+
+## Sepette adet artırma kapatıldı
+
+`MAX_QTY = 1`. Adet kontrolü, "Toplam ürün" satırı ve kart üzerindeki
+adet rozeti gizlendi.
+
+**Gerekçe:** stok kontrolü ve düşümü içecek hazırlandıktan *sonra*
+yapılıyor (`order_service` ADIM 8). 3 fincan sipariş verilirken üçünü de
+karşılayacak kahve ve bardak var mı önceden bilinmiyor; ikinci fincanda
+bardak biterse akış yarıda kalır ve robot boşa çalışır.
+
+Aşama 3'te sunucu tarafına rezerve/kesinleştir/iade eklenince stok
+siparişin **başında** ayrılacak. O zaman `MAX_QTY` değerini artırmak ve
+`QTY_ENABLED` bloklarını geri açmak yeterli — kod yerinde duruyor.
+
+---
+
+## /stock sayfası iyileştirmeleri
+
+**1. Yazma uçları gerçekten korunuyor artık.**
+
+`require_admin` bağımlılığı Aşama 0'da yazılmıştı ama uçlara
+**takılmamıştı**: arayüz `X-Admin-Token` başlığını gönderiyordu, backend
+hiç bakmıyordu. Ağdaki herhangi bir cihaz stok kayıtlarını
+sıfırlayabiliyordu. `/stock/refill` ve `/stock/thresholds` artık
+doğruluyor.
+
+Token eşleşmezse arayüz 401'i anlaşılır bir mesaja çeviriyor:
+*"frontend/.env içindeki VITE_ADMIN_TOKEN, backend .env içindeki
+ADMIN_TOKEN ile aynı olmalı."*
+
+**2. Yenileme formu artık mevcut değeri gösteriyor.**
+
+Backend `refill` ucu `$set` kullanıyor — girilen değer mevcut miktara
+**eklenmiyor, yerine yazılıyor**. Form bunu söylüyordu ama mevcut
+miktarı göstermiyordu; personel "Güncel Stok" sekmesine gidip geri
+dönmek zorundaydı.
+
+Her alanın yanında `şu an 420 g` yazıyor ve kaydetmeden önce özet onayı
+çıkıyor:
+
+```
+Stok değerleri aşağıdaki gibi DEĞİŞTİRİLECEK:
+
+  Çekirdek Kahve: 700 → 70 g  ⚠ AZALIYOR
+  Bardak: 44 → 70 adet
+
+Girilen değerler mevcut miktara eklenmez, yerine yazılır.
+```
+
+700 yerine 70 yazmak stoğun %90'ını sessizce siliyordu; artık görünür.
+
+**3. Giriş parolası `.env`'e taşındı** (`VITE_ADMIN_PASSWORD`).
+Hâlâ tarayıcıda çalışan bir sabit ve gerçek koruma değil — asıl koruma
+yukarıdaki token. Ama kaynak koddan çıktı.
+
+**4. `stock_service.py` içindeki `datetime.utcnow()`** düzeltildi
+(3.12'de deprecated, saat dilimi bilgisi de taşımıyordu).
+
+### Bu sayfada bilerek ertelenenler
+
+- `stock_service.BEVERAGE_PROFILE` hâlâ `catalog.py`'nin bir kopyası.
+  Aşama 3'te tek kaynağa indirilecek.
+- Sayfa otomatik yenilenmiyor; ↻ düğmesi var. Aşama 5'te yönetici
+  paneliyle ele alınabilir.
+- Sayfa açık temaya taşınmadı — personel ekranı, kiosk değil.
+
+
+---
+
+## Çift katmanlı veri deposu
+
+```
+    sipariş / stok yenileme
+            │
+            ▼  senkron, her zaman çalışır
+    ┌───────────────────┐    kuyruk (outbox)   ┌──────────────────┐
+    │  SQLite (yerel)   │ ──────────────────►  │ MongoDB (bulut)  │
+    │  operasyonel      │    sync_service      │ kalıcı kayıt     │
+    └───────────────────┘    her 20 sn         └──────────────────┘
+```
+
+**Tüm yazmalar önce SQLite'a gider ve senkron tamamlanır.** İnternet
+kopsa, Atlas yavaşlasa veya DNS çözülmese bile stok işlemleri sürer.
+MongoDB'ye aktarım arka planda kuyruk üzerinden yapılır.
+
+### Neden MongoDB'ye doğrudan yazılmıyor
+
+Talebiniz "MongoDB birincil, SQLite ikincil" idi. Yazma yolunu buluta
+bağlamanın somut riski şu: her stok işlemi bir bulut gidiş-dönüşü
+bekler. Bağlantı koptuğunda sipariş akışı ADIM 8'de takılır,
+gecikmelerde robot boşta bekler — yani kahve makinesi internetin
+durumuna bağımlı hale gelir.
+
+Bu yüzden rolleri şöyle ayırdım:
+
+| | Rol |
+|---|---|
+| **SQLite** | operasyonel kayıt — kiosk bunun üzerinden çalışır |
+| **MongoDB** | kalıcı kayıt ve raporlama — sistemin uzun vadeli gerçeği |
+
+MongoDB hâlâ verinin asıl durduğu yer; sadece **yazma yolunda değil**.
+Bu, uç cihazlarda standart olan "önce yerel" desenidir.
+
+### Kuyruk neden mutlak değer taşıyor
+
+Kuyruk kaydı "9 g düş" gibi bir **fark** değil, işlem sonrası oluşan
+**tam stok durumunu** taşır. Sebebi tekrar güvenliği: aktarım yarıda
+kalıp yeniden denendiğinde fark iki kez uygulanırsa stok kalıcı olarak
+bozulur; mutlak değer kaç kez yazılırsa yazılsın aynı sonucu verir.
+Log kayıtları da `op_id`'lerini `_id` olarak kullanır, upsert ile
+mükerrer satır oluşmaz.
+
+### Yön tek taraflı
+
+Aktarım yalnızca SQLite → MongoDB. Kiosk kendi stoğunun tek yazarıdır;
+ters yönde yazma olsaydı çakışma çözümü gerekirdi.
+
+MongoDB **yalnızca ilk kurulumda** okunur: yerel veritabanı hiç yoksa
+son bilinen stok ve eşikler oradan alınır. Yerel kayıt varsa buluttan
+okuma yapılmaz — çevrimdışı yapılan işlemler eski bulut değeriyle
+ezilmesin.
+
+### Doğrulama
+
+Uçtan uca çalıştırıldı:
+
+```
+1) MongoDB erişilemezken açılış        → SQLite kuruldu
+2) Çevrimdışı 4 sipariş + 1 dolum      → hepsi işlendi, kuyrukta 5 kayıt
+3) Bağlantı geldi                      → 5 kayıt aktarıldı
+   SQLite  : coffee=1000 milk=4700 choc=500 cups=50
+   MongoDB : coffee=1000 milk=4700 choc=500 cups=50   ✅ eşleşti
+4) Log aktarımı                        → 4 sipariş + 1 dolum ✅
+5) TEKRAR TESTİ: aynı 4 kayıt yeniden aktarıldı
+   stok değişmedi ✅   mükerrer log satırı yok ✅
+```
+
+### Yeni uçlar
+
+| Uç | İş |
+|---|---|
+| `GET /stock/sync` | kuyruk ve bağlantı durumu |
+| `POST /stock/sync` | kuyruğu hemen boşalt (yönetici) |
+
+`GET /stock/sync` yanıtı:
+
+```json
+{ "mongo_enabled": true, "mongo_online": false, "pending": 12,
+  "synced_total": 340, "last_error": "...", "sqlite_path": "..." }
+```
+
+`pending > 0` ve `mongo_online: false` → kiosk çevrimdışı çalışıyor,
+kayıtlar birikiyor. Veri kaybı yok.
+
+### Ayarlar
+
+```dotenv
+SQLITE_PATH=data/kiosk.db
+SYNC_INTERVAL=20        # kuyruk boşaltma sıklığı (sn)
+SYNC_BATCH=200          # tur başına en fazla kayıt
+MONGO_ENABLED=true      # false → yalnızca yerel çalışma
+```
+
+`data/` ve `logs/` `.gitignore`'a eklendi. Docker'da kalıcılık için:
+
+```bash
+docker run -v kiosk-data:/app/data -v kiosk-logs:/app/logs ...
+```
+
+Yeni bağımlılık yok — `sqlite3` standart kütüphanede.
+
+---
+
+## Loglama
+
+Her şey `print()` ile stdout'a yazılıyordu. Kiosk 7/24 çalıştığı ve
+genellikle bir servis yöneticisi altında başladığı için bunun üç
+sorunu vardı: servis yeniden başlayınca geçmiş kayboluyordu, seviye
+ayrımı yoktu, "dün akşam ne oldu" sorusunun cevabı yoktu.
+
+```
+logs/backend.log   tüm kayıtlar
+logs/error.log     yalnızca WARNING ve üstü — sorun ararken bakılacak yer
+```
+
+Dosyalar boyut sınırına ulaşınca döndürülür (`LOG_MAX_MB` × `LOG_BACKUPS`
++ 1 dosya), disk dolmaz. Konsola da yazılmaya devam ediyor.
+
+```dotenv
+LOG_LEVEL=INFO      # DEBUG | INFO | WARNING | ERROR
+LOG_DIR=logs
+LOG_MAX_MB=10
+LOG_BACKUPS=5
+```
+
+Örnek:
+
+```
+15:00:10 INFO  core.sqlite_store    [sqlite_store.py:316] Stok düşüldü [job-1] btn=1
+                                    kahve=9.0g süt=0ml bardak=1 → kalan {...}
+15:00:57 INFO  service.sync_service [sync_service.py:186] ☁️  MongoDB bağlantısı geri geldi.
+15:00:57 INFO  service.sync_service [sync_service.py:136] 5 kayıt MongoDB'ye aktarıldı.
+```
+
+`core/logging.py` → `core/applog.py` olarak yeniden adlandırıldı; eski
+ad standart kütüphanenin `logging` modülüyle karışıyordu. Sipariş akışı
+yardımcıları (`log`, `log_order_detail`) da bu dosyada.
+
+`websockets`, `pymongo`, `motor`, `asyncio` gibi gürültülü kütüphaneler
+WARNING seviyesine kısıldı — DEBUG modunda her paketi basıyorlardı.
+
+
+---
+
 ## Düzeltilen hatalar (tüm paket)
 
 | # | Hata | Sonucu |

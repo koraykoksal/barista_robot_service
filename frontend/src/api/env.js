@@ -71,41 +71,69 @@ const params =
     ? new URLSearchParams(window.location.search)
     : new URLSearchParams();
 
-/** Önce URL, sonra .env */
-const pick = (urlKey, envValue) => {
+/* ─────────────────────────────────────────────
+   ÇALIŞMA ZAMANI YAPILANDIRMASI
+
+   public/config.js dosyası index.html tarafından düz script olarak
+   yüklenir ve window.__KIOSK_CONFIG__ nesnesini kurar. Derlemeye
+   dahil olmadığı için sahadaki dist/ klasöründe düzenlenebilir —
+   yeniden derleme veya sunucu yeniden başlatma gerekmez.
+   ───────────────────────────────────────────── */
+
+const runtime =
+  (typeof window !== "undefined" && window.__KIOSK_CONFIG__) || {};
+
+/**
+ * Değer okuma zinciri:
+ *   1. URL sorgu parametresi   (?categories=coffee)
+ *   2. public/config.js
+ *   3. .env  (import.meta.env)
+ */
+const pick = (urlKey, envValue, envKey) => {
   const fromUrl = params.get(urlKey);
-  return fromUrl !== null ? fromUrl : envValue;
+  if (fromUrl !== null) return fromUrl;
+
+  if (envKey && runtime[envKey] !== undefined && String(runtime[envKey]).trim() !== "") {
+    return runtime[envKey];
+  }
+  return envValue;
 };
+
+/** URL karşılığı olmayan ayarlar için: önce config.js, sonra .env */
+const fromConfig = (envKey, envValue) =>
+  runtime[envKey] !== undefined && String(runtime[envKey]).trim() !== ""
+    ? runtime[envKey]
+    : envValue;
 
 /* ─────────────────────────────────────────────
    GENEL AYARLAR
    ───────────────────────────────────────────── */
 
 /** Genel çevrimdışı anahtarı — servis bazlı ayarların varsayılanı */
-export const OFFLINE = asFlag(pick("offline", import.meta.env.VITE_OFFLINE));
+export const OFFLINE = asFlag(pick("offline", import.meta.env.VITE_OFFLINE, "VITE_OFFLINE"));
 
 /** ?debug=1 → ekran üstü teşhis paneli (kioskta devtools açmadan) */
 export const DEBUG = asFlag(params.get("debug"));
 
 export const OFFLINE_SCENARIO = asText(
-  pick("scenario", import.meta.env.VITE_OFFLINE_SCENARIO),
+  pick("scenario", import.meta.env.VITE_OFFLINE_SCENARIO, "VITE_OFFLINE_SCENARIO"),
   "ok"
 );
 
 export const OFFLINE_SPEED = asNumber(
-  pick("speed", import.meta.env.VITE_OFFLINE_SPEED),
+  pick("speed", import.meta.env.VITE_OFFLINE_SPEED, "VITE_OFFLINE_SPEED"),
   1
 );
 
-export const API_URL = asText(import.meta.env.VITE_API_URL, "http://127.0.0.1:8000");
+export const API_URL = asText(fromConfig("VITE_API_URL", import.meta.env.VITE_API_URL), "http://127.0.0.1:8000");
 
-export const ADMIN_TOKEN = asText(import.meta.env.VITE_ADMIN_TOKEN);
+export const ADMIN_TOKEN = asText(fromConfig("VITE_ADMIN_TOKEN", import.meta.env.VITE_ADMIN_TOKEN));
 
 export const POLL = {
-  order:   asNumber(import.meta.env.VITE_ORDER_POLL_MS, 800),
-  machine: asNumber(import.meta.env.VITE_MACHINE_POLL_MS, 1000),
-  stock:   asNumber(import.meta.env.VITE_STOCK_POLL_MS, 5000),
-  robot:   asNumber(import.meta.env.VITE_ROBOT_POLL_MS, 2000),
+  order:   asNumber(fromConfig("VITE_ORDER_POLL_MS", import.meta.env.VITE_ORDER_POLL_MS), 800),
+  machine: asNumber(fromConfig("VITE_MACHINE_POLL_MS", import.meta.env.VITE_MACHINE_POLL_MS), 1000),
+  stock:   asNumber(fromConfig("VITE_STOCK_POLL_MS", import.meta.env.VITE_STOCK_POLL_MS), 5000),
+  robot:   asNumber(fromConfig("VITE_ROBOT_POLL_MS", import.meta.env.VITE_ROBOT_POLL_MS), 2000),
 };
 
 /* ─────────────────────────────────────────────
@@ -143,11 +171,11 @@ const forcedMock = new Set(asList(params.get("mock")));
 const forcedLive = new Set(asList(params.get("live")));
 
 const ENV_SERVICE = {
-  machine: import.meta.env.VITE_OFFLINE_MACHINE,
-  robot:   import.meta.env.VITE_OFFLINE_ROBOT,
-  stock:   import.meta.env.VITE_OFFLINE_STOCK,
-  order:   import.meta.env.VITE_OFFLINE_ORDER,
-  syrup:   import.meta.env.VITE_OFFLINE_SYRUP,
+  machine: fromConfig("VITE_OFFLINE_MACHINE", import.meta.env.VITE_OFFLINE_MACHINE),
+  robot:   fromConfig("VITE_OFFLINE_ROBOT",   import.meta.env.VITE_OFFLINE_ROBOT),
+  stock:   fromConfig("VITE_OFFLINE_STOCK",   import.meta.env.VITE_OFFLINE_STOCK),
+  order:   fromConfig("VITE_OFFLINE_ORDER",   import.meta.env.VITE_OFFLINE_ORDER),
+  syrup:   fromConfig("VITE_OFFLINE_SYRUP",   import.meta.env.VITE_OFFLINE_SYRUP),
 };
 
 function resolveService(key) {
@@ -191,8 +219,8 @@ export const MOCKED_LABEL = SERVICE_KEYS
 const CATEGORY_KEYS = ["coffee", "ice_cream"];
 
 const ENV_CATEGORY = {
-  coffee:    import.meta.env.VITE_CATEGORY_COFFEE,
-  ice_cream: import.meta.env.VITE_CATEGORY_ICECREAM,
+  coffee:    fromConfig("VITE_CATEGORY_COFFEE",   import.meta.env.VITE_CATEGORY_COFFEE),
+  ice_cream: fromConfig("VITE_CATEGORY_ICECREAM", import.meta.env.VITE_CATEGORY_ICECREAM),
 };
 
 const urlCategories = asList(params.get("categories"));
@@ -273,5 +301,6 @@ export function logConfig() {
     speed: OFFLINE_SPEED,
     services: OFFLINE_SERVICES,
     categories: CATEGORIES,
+    kaynak: Object.keys(runtime).length ? "config.js + .env" : ".env",
   });
 }

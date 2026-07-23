@@ -5,7 +5,15 @@ import { api, ENDPOINTS, adminConfig } from "../api/client";
 // ─────────────────────────────────────────────
 // PAROLA — değiştirmek için burası yeterli
 // ─────────────────────────────────────────────
-const ADMIN_PASSWORD   = "wmf2024";
+// Parola .env'den okunur (VITE_ADMIN_PASSWORD); tanımlı değilse
+// eski varsayılan kullanılır.
+//
+// ⚠️  Bu tarayıcıda çalışan bir sabit — derlenmiş pakette açıkça
+// görünür ve gerçek bir koruma DEĞİLDİR. Yalnızca personelin
+// yanlışlıkla bu sayfaya girmesini engeller. Asıl koruma backend'deki
+// X-Admin-Token başlığıdır; artık /stock/refill ve /stock/thresholds
+// uçlarına gerçekten takılı.
+const ADMIN_PASSWORD   = import.meta.env.VITE_ADMIN_PASSWORD || "wmf2024";
 const SESSION_KEY      = "stock_admin_auth";
 const SESSION_DURATION = 30 * 60 * 1000; // 30 dakika (ms)
 
@@ -766,6 +774,26 @@ const StockManagement = () => {
     if (!Object.keys(payload).length) {
       showToast("En az bir malzeme miktarı girin.", "warning"); return;
     }
+    // Değişiklik özetiyle onay al. Bu uç $set kullanıyor: 700 yerine
+    // yanlışlıkla 70 yazmak stoğun %90'ını sessizce siler. Ne olacağını
+    // önceden göstermek bu hatayı önler.
+    const summary = MATERIALS
+      .filter(({ key }) => payload[key] !== undefined)
+      .map(({ key, label, unit }) => {
+        const before = stockData?.stock?.[key];
+        const after = payload[key];
+        const arrow = before != null ? `${fmtNum(before)} → ${after}` : `${after}`;
+        const warn = before != null && after < before ? "  ⚠ AZALIYOR" : "";
+        return `  ${label}: ${arrow} ${unit}${warn}`;
+      })
+      .join("\n");
+
+    const confirmed = window.confirm(
+      `Stok değerleri aşağıdaki gibi DEĞİŞTİRİLECEK:\n\n${summary}\n\n` +
+      "Girilen değerler mevcut miktara eklenmez, yerine yazılır.\n\nOnaylıyor musunuz?"
+    );
+    if (!confirmed) return;
+
     payload.note = refillNote;
     try {
       await api.put(ENDPOINTS.stockRefill, payload, axiosCfg);
@@ -774,7 +802,10 @@ const StockManagement = () => {
       setRefillNote("");
       fetchStock();
     } catch (e) {
-      const msg = e?.response?.data?.detail || e?.message || "Bilinmeyen hata";
+      const msg = e?.response?.status === 401
+        ? "Yönetici token'ı geçersiz veya eksik. frontend/.env içindeki "
+          + "VITE_ADMIN_TOKEN, backend .env içindeki ADMIN_TOKEN ile aynı olmalı."
+        : (e?.response?.data?.detail || e?.message || "Bilinmeyen hata");
       showToast("Güncelleme hatası: " + msg, "error");
       console.error("[Refill] PUT /stock/refill →", e?.response?.status, msg);
     }
@@ -879,12 +910,24 @@ const StockManagement = () => {
       <div>
         <h2 className="section-title">Stok Yenileme</h2>
         <p className="section-sub">
-          Doldurmak istediğiniz malzemelerin yeni miktarını girin.<br />
+          Girilen değer mevcut miktara <strong>eklenmez</strong>, onun
+          <strong> yerine yazılır</strong>. Deponun yeni toplam miktarını girin.<br />
           Boş bırakılan alanlar değiştirilmez.
         </p>
         {MATERIALS.map((m) => (
           <div key={m.key} className="form-row">
-            <label className="form-label"><span>{m.icon}</span> {m.label}</label>
+            {/* Mevcut değer burada gösterilmezse personel "Güncel Stok"
+                sekmesine gidip geri dönmek zorunda kalıyordu; üstelik
+                değer yazılmadan önce ne olduğunu görmeden yazmak,
+                $set semantiğinde sessiz stok kaybına yol açabiliyor. */}
+            <label className="form-label">
+              <span>{m.icon}</span> {m.label}
+              {stockData?.stock?.[m.key] != null && (
+                <span className="td-muted" style={{ marginLeft: 8, fontSize: 12 }}>
+                  şu an {fmtNum(stockData.stock[m.key])} {m.unit}
+                </span>
+              )}
+            </label>
             <div className="form-input-wrap">
               <input
                 className={`form-input${refillValues[m.key] !== "" && !isValidInt(refillValues[m.key]) ? " input-error" : ""}`}

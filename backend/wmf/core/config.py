@@ -106,6 +106,40 @@ JOB_RETENTION_SECONDS = _int("JOB_RETENTION_SECONDS", 900)   # 15 dk
 
 
 # ─────────────────────────────────────────────
+# LOGLAMA
+# ─────────────────────────────────────────────
+LOG_LEVEL   = _str("LOG_LEVEL", "INFO")        # DEBUG | INFO | WARNING | ERROR
+LOG_DIR     = _str("LOG_DIR", "logs")          # göreliyse APP_ROOT'a göre
+LOG_MAX_MB  = _int("LOG_MAX_MB", 10)           # dosya başına boyut sınırı
+LOG_BACKUPS = _int("LOG_BACKUPS", 5)           # kaç eski dosya saklansın
+
+
+# ─────────────────────────────────────────────
+# VERİTABANI — ÇİFT KATMAN
+# ─────────────────────────────────────────────
+#
+# SQLite yerel ve her zaman erişilebilir; kiosk internetsiz kaldığında
+# bile stok işlemleri kesintisiz sürsün diye TÜM yazmalar önce oraya
+# gider. MongoDB uzun vadeli kayıt ve raporlama katmanıdır; yazmalar
+# bir kuyruk (outbox) üzerinden ona aktarılır.
+#
+# Neden Mongo'ya doğrudan yazılmıyor: her stok işlemi bulut gidiş-dönüşü
+# beklerdi. Bağlantı koptuğunda sipariş akışı stok adımında takılır,
+# gecikmelerde ise robot boşta bekler.
+SQLITE_PATH = _str("SQLITE_PATH", "data/kiosk.db")   # göreliyse APP_ROOT'a göre
+
+# Kuyruğun MongoDB'ye boşaltılma sıklığı (saniye)
+SYNC_INTERVAL = _float("SYNC_INTERVAL", 20.0)
+
+# Tek turda en fazla kaç kayıt aktarılsın (uzun kopukluk sonrası
+# tek seferde binlerce kaydı göndermeyi engeller)
+SYNC_BATCH = _int("SYNC_BATCH", 200)
+
+# MongoDB tamamen devre dışı bırakılabilir (yalnızca yerel çalışma)
+MONGO_ENABLED = _str("MONGO_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
+
+
+# ─────────────────────────────────────────────
 # İÇECEK BİLGİLERİ — catalog.py'den türetilir
 # ─────────────────────────────────────────────
 # Elle senkron tutulmaz. İçecek eklemek/çıkarmak için catalog.py'yi düzenleyin.
@@ -173,8 +207,17 @@ def validate() -> None:
             "Gerçek robot için .env içinde ROBOT_IP değerini güncelleyin."
         )
 
-    if not os.getenv("MONGO_URI"):
+    if MONGO_ENABLED and not os.getenv("MONGO_URI"):
         warnings.append("MONGO_URI ortam değişkeni yok — varsayılan yerel bağlantı denenecek.")
+
+    if not MONGO_ENABLED:
+        warnings.append(
+            "MONGO_ENABLED=false — yalnızca yerel SQLite kullanılacak, "
+            "buluta hiçbir kayıt aktarılmayacak."
+        )
+
+    if LOG_LEVEL.upper() not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+        warnings.append(f"LOG_LEVEL={LOG_LEVEL} tanınmıyor — INFO kullanılacak.")
 
     if warnings:
         print("=" * 60)

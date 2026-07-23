@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 from service.registry     import coffee, monitor
 from service.order_service import run_order_flow
-from core.logging import log, log_order_detail
+from core.applog import log, log_order_detail
 from core.machine_errors import describe_machine_errors
 from core import catalog
 from core.config import COFFEE_OVERALL_TIMEOUT, COFFEE_RECV_TIMEOUT, COFFEE_SILENT_ROUNDS

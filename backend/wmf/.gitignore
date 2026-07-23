@@ -174,3 +174,10 @@ poetry.toml
 pyrightconfig.json
 
 # End of https://www.toptal.com/developers/gitignore/api/python
+
+# Yerel veri deposu ve loglar — makineye özgü, commit edilmez
+data/
+logs/
+*.db
+*.db-wal
+*.db-shm

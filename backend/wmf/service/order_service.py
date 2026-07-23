@@ -59,7 +59,7 @@ from core.config import (
     ROBOT_MODE_POLL_INTERVAL,
     ROBOT_MODE_SWITCH_TIMEOUT,
 )
-from core.logging import log
+from core.applog import log
 from core.machine_errors import check_monitor_state, describe_machine_errors
 from core.ws_utils import is_rcp_confirmation_required
 from service import stock_service

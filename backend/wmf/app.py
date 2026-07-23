@@ -2,17 +2,23 @@
 app.py — uygulama girişi
 
 Görevi yalnızca:
+  • loglamayı kurmak
   • FastAPI uygulamasını oluşturmak
   • CORS tanımlamak
   • lifespan (startup / shutdown) yönetmek
   • router'ları bağlamak
 
 KATMANLAR:
-  core/     → yapılandırma, veri, saf yardımcılar
-  service/  → cihaz istemcileri ve iş mantığı
+  core/     → yapılandırma, veri (SQLite + MongoDB), loglama, saf yardımcılar
+  service/  → cihaz istemcileri, iş mantığı, senkronizasyon
   route/    → HTTP uçları
 
   Bağımlılık yönü tek yönlüdür:  route → service → core
+
+VERİ KATMANI:
+  Yazmalar yerel SQLite'a senkron gider; MongoDB'ye aktarım arka
+  planda kuyruk üzerinden yapılır. Böylece internet koptuğunda kiosk
+  çalışmaya devam eder ve hiçbir kayıt kaybolmaz.
 """
 
 import asyncio
@@ -21,7 +27,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from core import config
+from core import config, sqlite_store
+from core.applog import get_logger, setup_logging
 from core.database import close_db, init_db
 from core.security import admin_protection_enabled
 from core.version import __version__
@@ -30,6 +37,13 @@ from route import order as order_route
 from route import stock as stock_route
 from route import syrup as syrup_route
 from service.registry import monitor, robot_mgr, syrup
+from service.sync_service import bootstrap as sync_bootstrap
+from service.sync_service import sync
+
+# Loglama, diğer her şeyden önce kurulmalı — açılış mesajları da
+# dosyaya düşsün.
+setup_logging()
+log = get_logger("app")
 
 
 # ══════════════════════════════════════════════
@@ -38,70 +52,93 @@ from service.registry import monitor, robot_mgr, syrup
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("=" * 60)
-    print(f"[STARTUP] WMF Coffee Service v{__version__} başlatılıyor...")
-    print("=" * 60)
+    log.info("=" * 58)
+    log.info("WMF Coffee Service v%s başlatılıyor...", __version__)
+    log.info("=" * 58)
 
     config.validate()
 
-    robot_mgr.start()
-    print("[STARTUP] RobotManager başlatıldı.")
-
-    robot_ok   = await asyncio.to_thread(_check_robot)
-    monitor_ok = await _check_monitor()
-    syrup_ok   = await _check_syrup()
-
+    # ── Yerel veritabanı (her koşulda çalışmalı) ──
     try:
-        print("[STARTUP] MongoDB başlatılıyor...")
-        await init_db()
+        boot = await sync_bootstrap()
+        log.info("SQLite hazır (yeni=%s, başlangıç=%s, bekleyen kayıt=%d).",
+                 boot["fresh"], boot["source"], boot["pending"])
         db_ok = True
     except Exception as e:
-        print(f"[STARTUP] ⚠️  MongoDB başlatma hatası (devam): {e}")
+        log.critical("SQLite başlatılamadı: %s", e, exc_info=True)
         db_ok = False
 
-    print("=" * 60)
-    print(f"[STARTUP] Robot:{robot_ok} | Monitor:{monitor_ok} | Syrup:{syrup_ok} | DB:{db_ok}")
-    print(f"[STARTUP] Yönetici koruması: {'AÇIK' if admin_protection_enabled() else 'KAPALI ⚠️'}")
-    print(f"[STARTUP] İzinli origin'ler: {config.CORS_ORIGINS}")
-    print("=" * 60)
+    # ── MongoDB (isteğe bağlı; yoksa yerel devam eder) ──
+    mongo_ok = False
+    if config.MONGO_ENABLED:
+        try:
+            mongo_ok = await init_db()
+        except Exception as e:
+            log.warning("MongoDB başlatma hatası (yoksayıldı): %s", e)
+    else:
+        log.warning("MONGO_ENABLED=false — yalnızca yerel SQLite kullanılacak.")
+
+    await sync.start()
+
+    # ── Robot ──
+    robot_mgr.start()
+    log.info("RobotManager başlatıldı.")
+    robot_ok = await asyncio.to_thread(_check_robot)
+
+    # ── Kahve makinesi izleyici ──
+    monitor_ok = await _check_monitor()
+
+    # ── Syrup dispenser ──
+    syrup_ok = await _check_syrup()
+
+    log.info("=" * 58)
+    log.info("Hazır. Robot:%s | Monitor:%s | Syrup:%s | SQLite:%s | Mongo:%s",
+             robot_ok, monitor_ok, syrup_ok, db_ok, mongo_ok)
+    log.info("Yönetici koruması: %s",
+             "AÇIK" if admin_protection_enabled() else "KAPALI ⚠️")
+    log.info("İzinli origin'ler: %s", config.CORS_ORIGINS)
+    log.info("=" * 58)
 
     yield   # ← uygulama burada çalışır
 
     # ══ SHUTDOWN ══════════════════════════════
-    print("[SHUTDOWN] Servisler durduruluyor...")
+    log.info("Servisler durduruluyor...")
 
     # Aktif sipariş varsa iptal et
     try:
         async with order_route._active_task_lock:
             task = order_route._active_task
             if task and not task.done():
-                print("[SHUTDOWN] ⚠️  Aktif sipariş iptal ediliyor...")
+                log.warning("Aktif sipariş iptal ediliyor...")
                 task.cancel()
                 try:
                     await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
                 except (asyncio.CancelledError, asyncio.TimeoutError):
                     pass
     except Exception as e:
-        print(f"[SHUTDOWN] Task iptal hatası (yoksayıldı): {e}")
+        log.warning("Sipariş iptal hatası (yoksayıldı): %s", e)
 
+    # Kuyrukta bekleyen kayıtları son bir kez göndermeyi dener
     try:
-        robot_mgr.stop()
-        print("[SHUTDOWN] RobotManager durduruldu.")
+        await sync.stop()
     except Exception as e:
-        print(f"[SHUTDOWN] RobotManager hatası: {e}")
+        log.warning("Senkronizasyon durdurma hatası: %s", e)
 
-    try:
-        await monitor.stop()
-        print("[SHUTDOWN] MachineMonitor durduruldu.")
-    except Exception as e:
-        print(f"[SHUTDOWN] MachineMonitor hatası: {e}")
+    for label, fn in (
+        ("RobotManager",   robot_mgr.stop),
+        ("MachineMonitor", monitor.stop),
+        ("MongoDB",        close_db),
+        ("SQLite",         sqlite_store.close),
+    ):
+        try:
+            result = fn()
+            if asyncio.iscoroutine(result):
+                await result
+            log.info("%s durduruldu.", label)
+        except Exception as e:
+            log.warning("%s durdurma hatası: %s", label, e)
 
-    try:
-        await close_db()
-    except Exception as e:
-        print(f"[SHUTDOWN] MongoDB hatası: {e}")
-
-    print("[SHUTDOWN] ✅ Temiz çıkış.")
+    log.info("Temiz çıkış.")
 
 
 # ══════════════════════════════════════════════
@@ -111,26 +148,25 @@ async def lifespan(app: FastAPI):
 def _check_robot() -> bool:
     try:
         robot_mgr._ensure_connected()
-        print("[STARTUP] ✅ Robot bağlandı.")
+        log.info("Robot bağlandı.")
         return True
     except Exception as e:
-        print(f"[STARTUP] ❌ Robot bağlantısı: {e}")
+        log.warning("Robot bağlantısı kurulamadı: %s", e)
         return False
 
 
 async def _check_monitor() -> bool:
     """
-    MachineMonitor önceki sürümde yorum satırındaydı, ancak
-    order_service.py sipariş öncesi monitor.get_state() çağırıyor.
-    Başlatılmazsa durum sözlüğü boş kalır ve check_monitor_state
-    her siparişi "makine çevrimdışı" diye reddedebilir.
+    order_service sipariş öncesi monitor.get_state() çağırıyor;
+    başlatılmazsa durum sözlüğü boş kalır ve her sipariş
+    "makine çevrimdışı" diye reddedilebilir.
     """
     try:
         await monitor.start()
-        print("[STARTUP] ✅ MachineMonitor başlatıldı.")
+        log.info("MachineMonitor başlatıldı.")
         return True
     except Exception as e:
-        print(f"[STARTUP] ❌ MachineMonitor: {e}")
+        log.warning("MachineMonitor başlatılamadı: %s", e)
         return False
 
 
@@ -138,10 +174,10 @@ async def _check_syrup() -> bool:
     try:
         result = await syrup.ping()
         ok = bool(result.get("ok"))
-        print(f"[STARTUP] {'✅' if ok else '❌'} Syrup Dispenser.")
+        log.info("Syrup Dispenser: %s", "bağlı" if ok else "yanıt yok")
         return ok
     except Exception as e:
-        print(f"[STARTUP] ❌ Syrup Dispenser: {e}")
+        log.warning("Syrup Dispenser bağlantısı kurulamadı: %s", e)
         return False
 
 

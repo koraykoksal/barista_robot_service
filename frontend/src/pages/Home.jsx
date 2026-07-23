@@ -55,7 +55,18 @@ import enFlag from "../assets/uk_flag.png";
  * bilgisi personelin işi; /stock sayfasında.
  */
 
-const MAX_QTY = 5;
+// Sepette adet artırma KAPALI.
+//
+// Neden: stok kontrolü ve düşümü içecek hazırlandıktan SONRA yapılıyor
+// (order_service ADIM 8). Yani 3 fincan sipariş verilirken üçünü de
+// karşılayacak kahve/bardak var mı önceden bilinmiyor; ikinci fincanda
+// bardak bitse akış yarıda kalır ve robot boşa çalışır.
+//
+// Aşama 3'te sunucu tarafına rezerve/kesinleştir/iade eklenince
+// (stok siparişin BAŞINDA ayrılacak) bu sınır kaldırılabilir:
+// MAX_QTY değerini artırıp aşağıdaki adet kontrolünü geri açmak yeterli.
+const MAX_QTY = 1;
+const QTY_ENABLED = MAX_QTY > 1;
 const CART_KEY = "current_order";
 const CURRENCY = "₺";
 
@@ -868,7 +879,7 @@ const Home = () => {
                       />
                     )}
 
-                    {selected && (
+                    {selected && QTY_ENABLED && (
                       <Badge
                         badgeContent={cartItem.qty}
                         color="primary"
@@ -976,25 +987,29 @@ const Home = () => {
                 </IconButton>
               </Stack>
 
-              {/* Adet */}
-              <Stack direction="row" alignItems="center" justifyContent="center" spacing={3} mt={2}>
-                <IconButton
-                  onClick={() => changeQty(-1)}
-                  sx={{ border: `1px solid ${palette.rule}`, borderRadius: 1 }}
-                >
-                  <RemoveIcon />
-                </IconButton>
-                <Typography variant="h3" sx={{ minWidth: 32, textAlign: "center" }}>
-                  {cartItem.qty}
-                </Typography>
-                <IconButton
-                  onClick={() => changeQty(1)}
-                  disabled={cartItem.qty >= MAX_QTY}
-                  sx={{ border: `1px solid ${palette.rule}`, borderRadius: 1 }}
-                >
-                  <AddIcon />
-                </IconButton>
-              </Stack>
+              {/* Adet — MAX_QTY 1 iken gösterilmez.
+                  Tek fincanda kontrolün anlamı yok ve boş bir
+                  artı/eksi çifti kullanıcıyı yanıltırdı. */}
+              {QTY_ENABLED && (
+                <Stack direction="row" alignItems="center" justifyContent="center" spacing={3} mt={2}>
+                  <IconButton
+                    onClick={() => changeQty(-1)}
+                    sx={{ border: `1px solid ${palette.rule}`, borderRadius: 1 }}
+                  >
+                    <RemoveIcon />
+                  </IconButton>
+                  <Typography variant="h3" sx={{ minWidth: 32, textAlign: "center" }}>
+                    {cartItem.qty}
+                  </Typography>
+                  <IconButton
+                    onClick={() => changeQty(1)}
+                    disabled={cartItem.qty >= MAX_QTY}
+                    sx={{ border: `1px solid ${palette.rule}`, borderRadius: 1 }}
+                  >
+                    <AddIcon />
+                  </IconButton>
+                </Stack>
+              )}
 
               {/* İlaveler */}
               {cartItem.customize?.length > 0 && (
@@ -1033,10 +1048,12 @@ const Home = () => {
         {/* Toplam + sipariş butonu */}
         {cartItem && (
           <Box sx={{ pt: 2, mt: 2, borderTop: `1px solid ${palette.rule}` }}>
-            <Stack direction="row" justifyContent="space-between" mb={0.5}>
-              <Typography variant="overline">{t.totalItems}</Typography>
-              <Typography variant="overline">{totalItems}</Typography>
-            </Stack>
+            {QTY_ENABLED && (
+              <Stack direction="row" justifyContent="space-between" mb={0.5}>
+                <Typography variant="overline">{t.totalItems}</Typography>
+                <Typography variant="overline">{totalItems}</Typography>
+              </Stack>
+            )}
             <Stack direction="row" justifyContent="space-between" mb={2}>
               <Typography variant="h4">{t.totalPrice}</Typography>
               <Typography variant="h4" color="primary.main">

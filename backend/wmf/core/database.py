@@ -25,8 +25,12 @@ from typing import Optional
 
 from motor.motor_asyncio import AsyncIOMotorClient
 
+from core.applog import get_logger
+
 # config, .env yüklemesini yapar — bu import sayesinde os.getenv çalışır
 from core import config  # noqa: F401  — .env yüklemesini tetikler
+
+log = get_logger(__name__)
 
 
 # ─────────────────────────────────────────────
@@ -85,6 +89,15 @@ def col_refill_logs():
     return get_db()["refill_logs"]
 
 
+async def ping(timeout_s: float = 4.0) -> None:
+    """
+    Bağlantı canlı mı? Değilse istisna fırlatır.
+    Senkronizasyon servisi her turda bunu çağırıyor.
+    """
+    import asyncio
+    await asyncio.wait_for(get_client().admin.command("ping"), timeout=timeout_s)
+
+
 # ─────────────────────────────────────────────
 # VARSAYILAN DOKÜMANLAR
 # ─────────────────────────────────────────────
@@ -100,10 +113,6 @@ DEFAULT_STOCK = {
     "milk_ml"    : 5000.0,   # 5 litre
     "choc_g"     : 500.0,
     "cups"       : 70,
-    # Aşama 3: sipariş başladığında rezerve edilen, bittiğinde serbest
-    # bırakılan geçici miktarlar. Eşik hesabı (kalan - rezerve) üzerinden
-    # yapılır; böylece aynı anda iki sipariş aynı son bardağı alamaz.
-    "reserved"   : {"coffee_g": 0.0, "milk_ml": 0.0, "choc_g": 0.0, "cups": 0},
     "updated_at" : None,
 }
 
@@ -121,67 +130,52 @@ DEFAULT_THRESHOLDS = {
 # BAŞLATMA
 # ─────────────────────────────────────────────
 
-async def init_db() -> None:
+async def init_db() -> bool:
     """
-    Uygulama başlarken çağrılır.
-    Bağlantıyı test eder, eksik dokümanları varsayılanlarla oluşturur,
+    MongoDB'yi hazırlar: bağlantıyı dener, eksik dokümanları oluşturur,
     indeksleri kurar.
+
+    DEĞİŞEN DAVRANIŞ:
+      Önceki sürüm bağlantı kurulamayınca istisna fırlatıyordu. Kiosk
+      internetsiz kaldığında bu, uygulamanın açılışını riske atıyordu.
+      Artık False dönüyor; sistem yerel SQLite üzerinden çalışmaya
+      devam ediyor ve senkronizasyon servisi bağlantıyı arka planda
+      yeniden deniyor.
+
+    Döndürür: bağlantı kuruldu mu
     """
     now = _now()
 
     try:
-        await get_client().admin.command("ping")
-        print("=" * 60)
-        print(f"[DB] ✅ MongoDB bağlantısı başarılı → {MONGO_DB}")
-        print(f"[DB]    {_mask_uri(MONGO_URI)}")
-        print("=" * 60)
-    except Exception as ping_err:
-        print(f"[DB] ❌ MongoDB ping hatası: {ping_err}")
-        print(f"[DB]    Denenen adres: {_mask_uri(MONGO_URI)}")
-        raise
+        await ping()
+        log.info("=" * 58)
+        log.info("MongoDB bağlantısı başarılı → %s", MONGO_DB)
+        log.info("   %s", _mask_uri(MONGO_URI))
+        log.info("=" * 58)
+    except Exception as e:
+        log.warning("MongoDB'ye ulaşılamadı: %s", e)
+        log.warning("   Denenen adres: %s", _mask_uri(MONGO_URI))
+        log.warning("   Sistem yerel SQLite ile çalışacak; bağlantı gelince "
+                    "bekleyen kayıtlar aktarılacak.")
+        return False
 
-    # ── stock ─────────────────────────────────
-    stock = col_stock()
-    existing = await stock.find_one({"_id": "current"})
-    if existing is None:
-        await stock.insert_one({**DEFAULT_STOCK, "updated_at": now})
-        print(f"[DB] stock dokümanı oluşturuldu: {DEFAULT_STOCK['cups']} bardak, "
-              f"{DEFAULT_STOCK['coffee_g']}g kahve")
-    else:
-        # Eski kayıtlarda 'reserved' alanı yok — geriye dönük ekle
-        if "reserved" not in existing:
-            await stock.update_one(
-                {"_id": "current"},
-                {"$set": {"reserved": DEFAULT_STOCK["reserved"], "updated_at": now}},
-            )
-            print("[DB] stock dokümanına 'reserved' alanı eklendi (migrasyon).")
-        print(f"[DB] stock mevcut: coffee={existing.get('coffee_g')}g "
-              f"milk={existing.get('milk_ml')}ml choc={existing.get('choc_g')}g "
-              f"cups={existing.get('cups')}")
-
-    # ── stock_thresholds ──────────────────────
-    thresh = col_thresholds()
-    existing_t = await thresh.find_one({"_id": "current"})
-    if existing_t is None:
-        await thresh.insert_one({**DEFAULT_THRESHOLDS, "updated_at": now})
-        print(f"[DB] stock_thresholds dokümanı oluşturuldu: {DEFAULT_THRESHOLDS}")
-    else:
-        print(f"[DB] eşikler mevcut: coffee_min={existing_t.get('coffee_g')}g "
-              f"milk_min={existing_t.get('milk_ml')}ml cups_min={existing_t.get('cups')}")
-
-    # ── indeksler ─────────────────────────────
-    # Log koleksiyonları sürekli büyür; tarih indeksi olmadan
-    # sort(-1).limit(N) sorguları tüm koleksiyonu tarar.
     try:
+        # Yalnızca hiç yoksa oluştur — yereldeki güncel değerleri ezme.
+        if await col_stock().find_one({"_id": "current"}) is None:
+            await col_stock().insert_one({**DEFAULT_STOCK, "updated_at": now})
+            log.info("MongoDB stok dokümanı oluşturuldu.")
+
+        if await col_thresholds().find_one({"_id": "current"}) is None:
+            await col_thresholds().insert_one({**DEFAULT_THRESHOLDS, "updated_at": now})
+            log.info("MongoDB eşik dokümanı oluşturuldu.")
+
         await col_order_logs().create_index([("ordered_at", -1)])
         await col_refill_logs().create_index([("refilled_at", -1)])
-        print("[DB] İndeksler hazır.")
-    except Exception as idx_err:
-        print(f"[DB] ⚠️  İndeks oluşturma hatası (yoksayıldı): {idx_err}")
+        log.info("MongoDB indeksleri hazır.")
+    except Exception as e:
+        log.warning("MongoDB başlangıç işlemleri tamamlanamadı (yoksayıldı): %s", e)
 
-    print("=" * 60)
-    print("[DB] ✅ Veritabanı başlatma tamamlandı.")
-    print("=" * 60)
+    return True
 
 
 async def close_db() -> None:
@@ -189,4 +183,4 @@ async def close_db() -> None:
     if _client:
         _client.close()
         _client = None
-        print("[DB] MongoDB bağlantısı kapatıldı.")
+        log.info("MongoDB bağlantısı kapatıldı.")

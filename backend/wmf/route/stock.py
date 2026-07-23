@@ -11,10 +11,12 @@ Stok yönetimi endpoint'leri:
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from core.security import require_admin
 from service import stock_service
+from service.sync_service import sync
 
 router = APIRouter()
 
@@ -56,7 +58,15 @@ async def stock_status():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put("/stock/refill", status_code=200)
+# Yazma uçları X-Admin-Token ile korunur.
+#
+# Bu koruma Aşama 0'da eklenmişti ama uçlara TAKILMAMIŞTI: arayüz
+# başlığı gönderiyordu, backend hiç bakmıyordu. Yani ağdaki herhangi
+# bir cihaz stok kayıtlarını sıfırlayabiliyordu.
+#
+# ADMIN_TOKEN .env'de boşsa koruma devre dışı kalır ve açılışta uyarı
+# basılır (bkz. core/config.validate).
+@router.put("/stock/refill", status_code=200, dependencies=[Depends(require_admin)])
 async def stock_refill(req: RefillRequest):
     """Stok değerlerini sıfırdan ayarlar (örn. coffee_g=200 → 200g'a set et)."""
     try:
@@ -73,7 +83,7 @@ async def stock_refill(req: RefillRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put("/stock/thresholds", status_code=200)
+@router.put("/stock/thresholds", status_code=200, dependencies=[Depends(require_admin)])
 async def stock_thresholds(req: ThresholdRequest):
     """Uyarı eşiklerini günceller."""
     try:
@@ -101,3 +111,24 @@ async def stock_refill_logs(limit: int = 20):
         return await stock_service.get_refill_logs(limit=limit)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/stock/sync", status_code=200)
+async def stock_sync_status():
+    """
+    Yerel kuyruk ve MongoDB bağlantı durumu.
+
+    pending > 0 ve mongo_online = false ise kiosk çevrimdışı çalışıyor
+    ve kayıtlar birikiyor demektir — veri kaybı yok, bağlantı gelince
+    aktarılacaklar.
+    """
+    return await sync.status()
+
+
+@router.post("/stock/sync", status_code=200, dependencies=[Depends(require_admin)])
+async def stock_sync_now():
+    """Kuyruğu hemen boşaltmayı dener (beklemeden)."""
+    try:
+        return await sync.drain_once()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Senkronizasyon başarısız: {e}")
