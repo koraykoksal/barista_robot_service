@@ -89,6 +89,10 @@ def col_refill_logs():
     return get_db()["refill_logs"]
 
 
+def col_syrup_stock():
+    return get_db()["syrup_stock"]
+
+
 async def ping(timeout_s: float = 4.0) -> None:
     """
     Bağlantı canlı mı? Değilse istisna fırlatır.

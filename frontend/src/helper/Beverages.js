@@ -255,6 +255,7 @@ export const souces = [
 export const syrups = [
     {
         id           : "vanilla",
+        channel      : 1,
         name_TR      : "Vanilya",
         name_EN      : "Vanilla",
         description_TR: "Dondurmana klasik bir lezzet katan tatlı ve kremsi vanilya şurubu.",
@@ -265,6 +266,7 @@ export const syrups = [
     },
     {
         id           : "caramel",
+        channel      : 2,
         name_TR      : "Karamel",
         name_EN      : "Caramel",
         description_TR: "Dondurmana zengin bir lezzet katan tatlı ve tereyağlı karamel şurubu.",
@@ -275,6 +277,7 @@ export const syrups = [
     },
     {
         id           : "chocolate",
+        channel      : 3,
         name_TR      : "Çikolata",
         name_EN      : "Chocolate",
         description_TR: "Dondurmana lüks bir lezzet katan zengin çikolata şurubu.",
@@ -285,6 +288,7 @@ export const syrups = [
     },
     {
         id           : "white_chocolate",
+        channel      : 4,
         name_TR      : "Beyaz Çikolata",
         name_EN      : "White Chocolate",
         description_TR: "Dondurmana zengin bir lezzet katan tatlı ve kremsi beyaz çikolata şurubu.",
@@ -315,6 +319,9 @@ export const syrups = [
 
 /** Tüm ilaveler tek listede — sepet ve detay ekranı buradan arar */
 export const allExtras = [...souces, ...syrups];
+
+/** Şurup ilavesinin backend kanal numarası (yoksa null — sos gibi) */
+export const extraChannel = (id) => findExtra(id)?.channel ?? null;
 
 /** id → kayıt. Bulunamazsa null. */
 export const findExtra = (id) => allExtras.find((e) => e.id === id) ?? null;

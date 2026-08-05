@@ -690,6 +690,8 @@ const StockManagement = () => {
 
   const [orderLogs, setOrderLogs]   = useState([]);
   const [refillLogs, setRefillLogs] = useState([]);
+  const [syrups, setSyrups] = useState([]);
+  const [syrupEdit, setSyrupEdit] = useState({});   // channel → { ml, threshold }
   const [logsLoading, setLogsLoading] = useState(false);
   const [logTab, setLogTab]         = useState(0);
 
@@ -704,6 +706,10 @@ const StockManagement = () => {
     setLoading(true);
     try {
       const res = await api.get(ENDPOINTS.stockStatus, { timeout: 5000 });
+      try {
+        const sy = await api.get(ENDPOINTS.stockSyrup, { timeout: 5000 });
+        setSyrups(sy.data?.channels ?? []);
+      } catch { /* şurup ucu yoksa yoksay */ }
       setStockData(res.data);
       const t = res.data?.thresholds || {};
       setThreshValues({
@@ -839,6 +845,35 @@ const StockManagement = () => {
   };
 
   // ── Render yardımcıları ───────────────────
+  const saveSyrup = async (channel) => {
+    const edit = syrupEdit[channel] || {};
+    const payload = {};
+    if (edit.ml !== undefined && edit.ml !== "") payload.ml = Number(edit.ml);
+    if (edit.threshold !== undefined && edit.threshold !== "") payload.threshold = Number(edit.threshold);
+    if (Object.keys(payload).length === 0) return;
+
+    const ch = syrups.find((x) => x.channel === channel);
+    const confirmed = window.confirm(
+      `${ch?.name ?? "Kanal " + channel} güncellenecek:\n\n` +
+      (payload.ml !== undefined ? `  Miktar: ${fmtNum(ch?.ml)} → ${payload.ml} ml\n` : "") +
+      (payload.threshold !== undefined ? `  Eşik: ${fmtNum(ch?.threshold)} → ${payload.threshold} ml\n` : "") +
+      "\nMiktar mevcut değere eklenmez, yerine yazılır.\n\nOnaylıyor musunuz?"
+    );
+    if (!confirmed) return;
+
+    try {
+      await api.put(ENDPOINTS.stockSyrupRefill(channel), payload, axiosCfg);
+      showToast(`${ch?.name ?? "Kanal " + channel} güncellendi.`, "success");
+      setSyrupEdit((prev) => ({ ...prev, [channel]: {} }));
+      fetchStock();
+    } catch (e) {
+      const msg = e?.response?.status === 401
+        ? "Yönetici token'ı geçersiz veya eksik."
+        : (e?.response?.data?.detail || e?.message || "Bilinmeyen hata");
+      showToast("Şurup güncelleme hatası: " + msg, "error");
+    }
+  };
+
   const stock  = stockData?.stock      || {};
   const thresh = stockData?.thresholds || {};
   const alerts = stockData?.alerts     || [];
@@ -901,6 +936,45 @@ const StockManagement = () => {
           );
         })}
       </div>
+      {syrups.length > 0 && (
+        <>
+          <h2 className="section-title" style={{ marginTop: 36 }}>Şurup Kanalları</h2>
+          <p className="section-sub">
+            Eşiğin altındaki kanalları kullanan içecekler sipariş edilemez
+            (dozaj yarıda kesilmesin diye). Miktar mevcut değerin yerine yazılır.
+          </p>
+          <div className="stock-grid">
+            {syrups.map((sy) => {
+              const low = Number(sy.ml) < Number(sy.threshold);
+              const pct = Math.min(100, Math.max(0, (Number(sy.ml) / Number(sy.capacity || 1000)) * 100));
+              const edit = syrupEdit[sy.channel] || {};
+              return (
+                <div key={sy.channel} className={`stock-card ${low ? "critical" : "ok"}`}>
+                  <div className="card-label">{sy.name || `Kanal ${sy.channel}`}</div>
+                  <div className={`card-value ${low ? "critical" : "ok"}`}>
+                    {fmtNum(sy.ml)}<span className="card-unit">ml</span>
+                  </div>
+                  <div className="card-threshold">
+                    Eşik: {fmtNum(sy.threshold)} ml {low && "· DÜŞÜK"}
+                  </div>
+                  <div className="progress-wrap">
+                    <div className={`progress-fill ${low ? "critical" : "ok"}`} style={{ width: `${pct}%` }} />
+                  </div>
+                  <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+                    <input
+                      type="number" placeholder="ml"
+                      value={edit.ml ?? ""}
+                      onChange={(e) => setSyrupEdit((prev) => ({ ...prev, [sy.channel]: { ...edit, ml: e.target.value } }))}
+                      style={{ width: "50%", padding: "6px 8px", fontSize: 13 }}
+                    />
+                    <button className="btn-ghost" onClick={() => saveSyrup(sy.channel)}>Kaydet</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
     </>
   );
 

@@ -848,6 +848,96 @@ WARNING seviyesine kısıldı — DEBUG modunda her paketi basıyorlardı.
 
 ---
 
+## Şurup stok kontrolü + ABORT önleme
+
+Şuruplu içeceklerde dozajın yarıda kesilmesini (`EVT:DISP:ABORT` →
+eksik reçete) önlemek için kanal bazlı stok kapısı eklendi.
+
+### Şurup stoğu — kanal bazlı, ml cinsinden
+
+Ana malzemelerden (kahve/süt/çikolata/bardak) ayrı tutuluyor çünkü
+şurup **kanal bazlı** (8 kanal, her biri ayrı şurup) ve tarifler de
+kanala bağlı. SQLite'ta `syrup_stock` tablosu; aynı outbox kuyruğuyla
+MongoDB'ye aktarılıyor.
+
+```
+kanal 1: Vanilya         1000ml (eşik 50)
+kanal 2: Karamel         1000ml (eşik 50)
+kanal 3: Çikolata        1000ml (eşik 50)
+kanal 4: Beyaz Çikolata  1000ml (eşik 50)
+kanal 5: Fındık          1000ml (eşik 50)
+```
+
+### Sipariş öncesi kapı
+
+`check_beverage` içeceğin şurup tarifini kontrol ediyor. Kanal
+yetersizse **makineye hiç gitmeden** engelliyor:
+
+- `below_threshold` — kalan miktar güvenlik eşiğinin altında
+- `insufficient` — eşik üstü ama bu siparişin ihtiyacından az
+
+İkisi birden aranıyor: eşik güvenlik payı, `need_ml` bu siparişin
+gereksinimi. Engellenen içecek `returnvalue=5` + `syrup_block`
+açıklamasıyla dönüyor. Şurupsuz içecekler (Espresso vb.) kapıya
+takılmadan geçiyor.
+
+### ABORT yine de işleniyor
+
+Stok kapısı ABORT'un en yaygın sebebini (şurup bitmesi) önler ama
+**pompa mekanik ayrılması** (`REASON=DISCONNECTED`) hâlâ ABORT
+üretebilir. Bu yüzden `EVT:DISP:ABORT` savunma amaçlı işleniyor:
+
+- `SyrupAbortError` ile `dispensed_ml` / `requested_ml` taşınıyor
+- akıtılabilen kadarı stoktan düşülüyor
+- sipariş "içecek eksik kaldı" diyerek durduruluyor, sistem takılmıyor
+
+Önceki sürüm yalnızca `COMPLETE` bekliyordu; ABORT gelince görmezden
+gelip zaman aşımına düşüyordu.
+
+### Açılış sağlık kontrolü
+
+Sistem açılırken şurup sistemiyle haberleşiyor:
+
+1. Cihaz ayakta mı (ping)
+2. Hangi kanallarda pompa fiziksel takılı (presence)
+3. Tanımlı tariflerin kanalları takılı ve yeterli mi
+
+Sorun bulursa uyarı logluyor ama açılışı engellemiyor — kahve tarafı
+şurupsuz da çalışabilir.
+
+### Frontend
+
+- Şurup ilavelerine backend kanal numarası eklendi (`vanilla`→1,
+  `caramel`→2, …)
+- Düşük kanaldaki şurup ProductDetail'de **"Tükendi"** rozetiyle
+  soluk ve tıklanamaz
+- Stok yönetim sayfasına **Şurup Kanalları** bölümü: her kanalın ml
+  durumu, düşük uyarısı ve yenileme alanı
+
+### Yeni uçlar
+
+| Uç | İş |
+|---|---|
+| `GET /stock/syrup` | tüm kanalların stok durumu |
+| `PUT /stock/syrup/{channel}` | kanalı güncelle (yönetici) |
+
+### Doğrulama
+
+```
+Kapı: kanal eşik altı  → below_threshold ile engellendi ✅
+Kapı: bu sipariş için az → insufficient ile engellendi ✅
+Tüketim: 1000ml → 992ml (8ml düştü) ✅
+check_beverage: Latte (kanal yetersiz) → returnvalue=5 + mesaj ✅
+check_beverage: Espresso (tarif yok)  → kapıya takılmadı ✅
+ABORT ayrıştırma: 1.25/5.0mL → eksik 3.75ml doğru ✅
+Frontend: Karamel (düşük) → Tükendi, tıklanamıyor ✅
+Sync: şurup kuyruğu MongoDB'ye aktarıldı, iki taraf eşleşti ✅
+Stok sayfası: 5 kanal listeleniyor, Karamel düşük ✅
+```
+
+
+---
+
 ## Düzeltilen hatalar (tüm paket)
 
 | # | Hata | Sonucu |

@@ -255,10 +255,26 @@ async def syrup_dispense(req: DispenseRequest):
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    except (ConnectionError, OSError) as e:
+        # Cihaza hiç ulaşılamadı — /syrup/motors ile aynı kodu döndür.
+        raise HTTPException(
+            status_code=503,
+            detail={"source": "syrup_connection", "error_code": "UNREACHABLE",
+                    "description": str(e), "host": syrup.host, "port": syrup.port}
+        )
     except Exception as e:
+        # "bağlantı reddedildi" gibi mesajlar OSError sarmalayabilir;
+        # metinden de yakala ki 500 yerine anlaşılır 503 dönsün.
+        msg = str(e)
+        if "bağlan" in msg.lower() or "connect" in msg.lower() or "refused" in msg.lower():
+            raise HTTPException(
+                status_code=503,
+                detail={"source": "syrup_connection", "error_code": "UNREACHABLE",
+                        "description": msg, "host": syrup.host, "port": syrup.port}
+            )
         raise HTTPException(
             status_code=500,
-            detail={"source": "syrup_internal", "error_code": "INTERNAL", "description": str(e)}
+            detail={"source": "syrup_internal", "error_code": "INTERNAL", "description": msg}
         )
 
 

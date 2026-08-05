@@ -1091,6 +1091,7 @@ const Home = () => {
         cart={cart}
         currency={CURRENCY}
         language={language}
+        disabledSyrupChannels={stockStatus?.disabled_syrup_channels ?? []}
       />
 
       <PreparingCoffee

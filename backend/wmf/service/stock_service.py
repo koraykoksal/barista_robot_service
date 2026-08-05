@@ -61,6 +61,7 @@ async def get_stock_status() -> Dict[str, Any]:
     import asyncio
     stock  = await asyncio.to_thread(sqlite_store.get_stock)
     thresh = await asyncio.to_thread(sqlite_store.get_thresholds)
+    syrups = await asyncio.to_thread(sqlite_store.get_syrup_stock)
 
     coffee_g = float(stock.get("coffee_g", 0))
     milk_ml  = float(stock.get("milk_ml", 0))
@@ -97,6 +98,33 @@ async def get_stock_status() -> Dict[str, Any]:
                        "message": f"Çikolata miktarı düşük! Kalan: {choc_g:.1f}g (eşik: {t_choc}g)",
                        "action": "choc_disabled"})
 
+    # ── Şurup kanalları ──
+    # Eşiğin altındaki kanaldan şurup akıtılırsa dozaj yarıda biter
+    # (EVT:DISP:ABORT) ve reçete eksik kalır. O kanalı kullanan
+    # içecekler sipariş edilemez. Kanal → durum haritası döndürülür;
+    # frontend hangi içeceğin hangi kanalı kullandığını tarifle eşler.
+    syrup_channels = {}
+    for row in syrups:
+        ch = int(row["channel"])
+        ml = float(row["ml"])
+        th = float(row["threshold"])
+        low = ml < th
+        syrup_channels[ch] = {
+            "channel": ch, "name": row.get("name"),
+            "ml": ml, "threshold": th, "capacity": float(row.get("capacity", 0)),
+            "low": low,
+        }
+        if low:
+            alerts.append({
+                "type": "warning", "material": f"syrup_{ch}",
+                "message": f"{row.get('name', f'Kanal {ch}')} şurubu düşük! "
+                           f"Kalan: {ml:.0f}ml (eşik: {th:.0f}ml)",
+                "action": "syrup_disabled",
+            })
+
+    # Eşiğin altındaki kanal numaraları — frontend/order kapısı için
+    disabled_syrup_channels = [ch for ch, v in syrup_channels.items() if v["low"]]
+
     overall = "ok"
     if alerts:
         overall = "critical" if any(a["type"] == "critical" for a in alerts) else "warning"
@@ -113,6 +141,8 @@ async def get_stock_status() -> Dict[str, Any]:
             "milk_disabled": milk_critical,
             "choc_disabled": choc_critical,
         },
+        "syrup_channels": syrup_channels,
+        "disabled_syrup_channels": disabled_syrup_channels,
         "alerts": alerts,
         "updated_at": stock.get("updated_at"),
     }
@@ -214,6 +244,53 @@ async def update_thresholds(
         sqlite_store.set_thresholds,
         {"coffee_g": coffee_g, "milk_ml": milk_ml, "choc_g": choc_g, "cups": cups},
     )
+
+
+async def get_syrup_stock() -> List[Dict]:
+    import asyncio
+    return await asyncio.to_thread(sqlite_store.get_syrup_stock)
+
+
+async def consume_syrup(channel: int, ml: float, job_id: str = "") -> Dict[str, Any]:
+    """Sipariş sırasında şurup akıtıldıktan sonra kanaldan düşer."""
+    import asyncio
+    return await asyncio.to_thread(sqlite_store.consume_syrup, int(channel), float(ml), job_id)
+
+
+async def refill_syrup(channel: int, ml=None, threshold=None,
+                       capacity=None, name=None) -> Dict[str, Any]:
+    import asyncio
+    return await asyncio.to_thread(
+        sqlite_store.refill_syrup, int(channel), ml, threshold, capacity, name
+    )
+
+
+async def check_syrup_available(channel: int, need_ml: float) -> Dict[str, Any]:
+    """
+    Sipariş öncesi kapı kontrolü: kanalda yeterli şurup var mı?
+
+    "Yeterli" = kalan miktar hem eşiğin üstünde hem de bu siparişin
+    ihtiyacını karşılayacak kadar. İkisi birden aranır çünkü eşik
+    güvenlik payı, need_ml ise bu siparişin gereksinimidir.
+    """
+    import asyncio
+    row = await asyncio.to_thread(sqlite_store.get_syrup_channel, int(channel))
+    if not row:
+        return {"ok": False, "reason": "channel_missing",
+                "message": f"Kanal {channel} tanımlı değil."}
+
+    ml = float(row["ml"])
+    th = float(row["threshold"])
+    enough = ml >= th and ml >= float(need_ml)
+    return {
+        "ok": enough,
+        "channel": int(channel),
+        "name": row.get("name"),
+        "remaining_ml": ml,
+        "threshold": th,
+        "need_ml": float(need_ml),
+        "reason": None if enough else ("below_threshold" if ml < th else "insufficient"),
+    }
 
 
 # ══════════════════════════════════════════════

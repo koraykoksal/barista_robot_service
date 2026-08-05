@@ -66,6 +66,7 @@ from service import stock_service
 from service.machine_monitor import NON_BLOCKING_ERROR_CODES
 from service.registry import coffee, monitor, robot_mgr, syrup
 from service.syrup_recipes import get_syrup_recipe
+from service.syrup_service import SyrupAbortError
 
 
 # ═════════════════════════════════════════════
@@ -261,6 +262,29 @@ async def run_order_flow(
                 try:
                     result = await syrup.dispense(channel, qty_ml)
                     log(job_id, "STEP_2_5_SYRUP", f"✅ Şurup tamam ({result.get('elapsed_s', '?')}s)")
+                    # Başarılı dozajdan sonra kanaldan düş. Stok kapısı
+                    # bu noktaya yeterli şurupla gelinmesini sağlar; buradaki
+                    # düşüm gerçekleşeni kaydeder.
+                    try:
+                        await stock_service.consume_syrup(channel, float(qty_ml), job_id)
+                    except Exception as e:
+                        log(job_id, "STEP_2_5_SYRUP", f"⚠️  Şurup stok düşümü yazılamadı: {e}")
+                except SyrupAbortError as e:
+                    # Dozaj yarıda kesildi (genelde pompa ayrılması).
+                    # Reçete eksik kaldı — sipariş bu noktada durdurulur.
+                    # Akıtılabilen kadarını yine de stoktan düş.
+                    try:
+                        await stock_service.consume_syrup(channel, float(e.dispensed_ml), job_id)
+                    except Exception:
+                        pass
+                    log(job_id, "STEP_2_5_SYRUP",
+                        f"❌ Şurup yarıda kesildi: {e.dispensed_ml:.1f}/{e.requested_ml:.1f}mL "
+                        f"(sebep={e.reason})")
+                    raise Exception(
+                        f"Şurup dozajı yarıda kesildi (kanal {channel}, {e.reason}): "
+                        f"reçete {e.requested_ml:.0f}mL istedi, {e.dispensed_ml:.0f}mL akıtıldı. "
+                        f"İçecek eksik kaldı."
+                    )
                 except TimeoutError as e:
                     raise TimeoutError(f"Syrup timeout: {e}")
                 except Exception as e:

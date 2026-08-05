@@ -6,7 +6,7 @@ import {
 import CloseIcon from "@mui/icons-material/Close";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 
-import { souces, syrups, getName, getDescription, extraName } from "../../helper/Beverages";
+import { souces, syrups, getName, getDescription, extraName, extraChannel } from "../../helper/Beverages";
 import { showToast } from "../../helper/toastify";
 import { palette } from "../../theme";
 
@@ -46,7 +46,7 @@ const LABELS = {
    İÇ BİLEŞEN
    ───────────────────────────────────────────── */
 
-const ProductDetailInner = ({ item, onClose, onAdd, currency, language }) => {
+const ProductDetailInner = ({ item, onClose, onAdd, currency, language, disabledSyrupChannels = [] }) => {
   const [selected, setSelected] = useState(item?.customize ?? []);
   const t = LABELS[language] ?? LABELS.TR;
 
@@ -138,14 +138,17 @@ const ProductDetailInner = ({ item, onClose, onAdd, currency, language }) => {
 
         <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1.5 }}>
           {options.map((option) => {
-            const active = selected.includes(option.id);
+            const channel = extraChannel(option.id);
+            const soldOut = channel != null && disabledSyrupChannels.includes(channel);
+            const active = selected.includes(option.id) && !soldOut;
             return (
               <Box
                 key={option.id}
                 role="button"
                 tabIndex={0}
-                onClick={() => toggle(option.id)}
-                onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && toggle(option.id)}
+                onClick={() => !soldOut && toggle(option.id)}
+                onKeyDown={(e) => !soldOut && (e.key === "Enter" || e.key === " ") && toggle(option.id)}
+                aria-disabled={soldOut}
                 sx={{
                   position: "relative",
                   display: "flex",
@@ -155,12 +158,26 @@ const ProductDetailInner = ({ item, onClose, onAdd, currency, language }) => {
                   p: 1.5,
                   width: 156,
                   borderRadius: 1,
-                  cursor: "pointer",
+
                   bgcolor: active ? "rgba(229, 53, 42, 0.07)" : palette.sand,
                   border: `2px solid ${active ? palette.red : "transparent"}`,
                   transition: "border-color 0.18s, background-color 0.18s",
+                  opacity: soldOut ? 0.4 : 1,
+                  cursor: soldOut ? "not-allowed" : "pointer",
+                  filter: soldOut ? "grayscale(1)" : "none",
                 }}
               >
+                {soldOut && (
+                  <Box sx={{
+                    position: "absolute", top: 8, left: 8, zIndex: 2,
+                    bgcolor: palette.ink, color: palette.paper,
+                    fontFamily: "var(--mono)", fontSize: 10, fontWeight: 700,
+                    letterSpacing: "0.08em", textTransform: "uppercase",
+                    px: 0.75, py: 0.25, borderRadius: 0.5,
+                  }}>
+                    Tükendi
+                  </Box>
+                )}
                 {active && (
                   <CheckCircleIcon
                     sx={{
@@ -263,6 +280,7 @@ const ProductDetail = ({
   cart,
   currency,
   language = "TR",
+  disabledSyrupChannels = [],
 }) => {
   const item = productModal?.item;
   const itemKey = item ? `${item.type}_${item.ButtonNumber ?? item.Name_TR}` : "closed";
@@ -305,6 +323,7 @@ const ProductDetail = ({
               onAdd={handleAdd}
               currency={currency}
               language={language}
+              disabledSyrupChannels={disabledSyrupChannels}
             />
           )}
         </Box>

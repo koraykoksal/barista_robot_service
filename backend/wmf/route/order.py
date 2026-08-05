@@ -19,6 +19,8 @@ from pydantic import BaseModel
 
 from service.registry     import coffee, monitor
 from service.order_service import run_order_flow
+from service import stock_service
+from service.syrup_recipes import get_syrup_recipe
 from core.applog import log, log_order_detail
 from core.machine_errors import describe_machine_errors
 from core import catalog
@@ -143,7 +145,41 @@ async def check_beverage(request: SendRequest, http_request: Request):
 
     print(f"[CHECK_BEVERAGE] {now} | IP={client_ip} | {bev_name} (btn={btn_raw})")
 
+    # ── Şurup kapısı ──
+    # İçeceğin şurup tarifi varsa, o kanalda yeterli şurup olduğunu
+    # sipariş BAŞLAMADAN doğrula. Yetersizse makineye hiç gitmeden
+    # engelle — böylece dozaj yarıda kesilip (EVT:DISP:ABORT) reçete
+    # eksik kalmaz.
+    syrup_block = None
+    recipe = get_syrup_recipe(btn_int)
+    if recipe:
+        channel = recipe.get("channel")
+        need_ml = recipe.get("ml", recipe.get("qty_ml", 0))
+        if channel and need_ml:
+            avail = await stock_service.check_syrup_available(channel, float(need_ml))
+            if not avail["ok"]:
+                syrup_block = {
+                    "channel": channel,
+                    "name": avail.get("name"),
+                    "remaining_ml": avail.get("remaining_ml"),
+                    "need_ml": avail.get("need_ml"),
+                    "reason": avail.get("reason"),
+                    "message": f"{avail.get('name', f'Kanal {channel}')} şurubu yetersiz — "
+                               f"bu içecek geçici olarak verilemiyor.",
+                }
+                print(f"[CHECK_BEVERAGE] ⛔ Şurup kapısı: {syrup_block['message']}")
+
     try:
+        # Şurup engeli varsa makineye hiç sormadan engelleyici yanıt dön.
+        if syrup_block is not None:
+            return {
+                "ws_uri"              : coffee.ws_uri,
+                "sent"                : request.message,
+                "result"              : {"returnvalue": 5, "status": "syrup_unavailable"},
+                "machine_error_detail": None,
+                "syrup_block"         : syrup_block,
+            }
+
         response = await coffee.check_beverage(request.message)
         result   = response if isinstance(response, dict) else {}
         code     = result.get("returnvalue")
@@ -163,6 +199,7 @@ async def check_beverage(request: SendRequest, http_request: Request):
             "sent"                : request.message,
             "result"              : response,
             "machine_error_detail": machine_error_detail,
+            "syrup_block"         : None,
         }
 
     except HTTPException:

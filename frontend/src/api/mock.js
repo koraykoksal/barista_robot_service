@@ -118,6 +118,20 @@ const stock = (() => {
 
 const thresholds = { coffee_g: 50, milk_ml: 350, choc_g: 50, cups: 2 };
 
+// Şurup kanalları — senaryoya göre biri düşük olabilir
+const syrupChannels = (() => {
+  const base = {
+    1: { channel: 1, name: "Vanilya",        ml: 1000, threshold: 50, low: false },
+    2: { channel: 2, name: "Karamel",        ml: 1000, threshold: 50, low: false },
+    3: { channel: 3, name: "Çikolata",       ml: 1000, threshold: 50, low: false },
+    4: { channel: 4, name: "Beyaz Çikolata", ml: 1000, threshold: 50, low: false },
+  };
+  if (s === "low-stock") {
+    base[2].ml = 20; base[2].low = true;   // Karamel düşük
+  }
+  return base;
+})();
+
 function stockStatus() {
   const coffeeCrit = stock.coffee_g < thresholds.coffee_g;
   const cupsCrit   = stock.cups     < thresholds.cups;
@@ -136,9 +150,15 @@ function stockStatus() {
   if (chocCrit && !allDisabled) alerts.push({ type: "warning", material: "chocolate",
     message: `Çikolata miktarı düşük! Kalan: ${stock.choc_g.toFixed(1)}g`, action: "choc_disabled" });
 
+  const disabled_syrup_channels = Object.values(syrupChannels)
+    .filter((c) => c.low)
+    .map((c) => c.channel);
+
   return {
     stock: { ...stock },
     thresholds: { ...thresholds },
+    syrup_channels: syrupChannels,
+    disabled_syrup_channels,
     status: {
       overall: alerts.some((a) => a.type === "critical") ? "critical"
              : alerts.length ? "warning" : "ok",
@@ -234,6 +254,16 @@ function route(config) {
   if (url === "/machine/status")        return ok(machineState(), config);
   if (url === "/robot/status")          return ok(robotState(), config);
   if (url === "/stock/status")          return ok(stockStatus(), config);
+  if (url === "/stock/syrup")           return ok({ channels: Object.values(syrupChannels).map(c => ({ ...c, capacity: 1000, updated_at: new Date().toISOString() })) }, config);
+  if (url.startsWith("/stock/syrup/") && method === "put") {
+    const ch = Number(url.split("/").pop());
+    if (syrupChannels[ch]) {
+      if (body.ml != null) { syrupChannels[ch].ml = Number(body.ml); syrupChannels[ch].low = syrupChannels[ch].ml < syrupChannels[ch].threshold; }
+      if (body.threshold != null) syrupChannels[ch].threshold = Number(body.threshold);
+      if (body.name != null) syrupChannels[ch].name = body.name;
+    }
+    return ok(syrupChannels[ch] ?? {}, config);
+  }
 
   if (url === "/check_beverage") {
     const m = machineState();

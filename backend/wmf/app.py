@@ -171,14 +171,62 @@ async def _check_monitor() -> bool:
 
 
 async def _check_syrup() -> bool:
+    """
+    Açılışta şurup sistemiyle haberleşip her şeyin yolunda olduğunu
+    doğrular:
+
+      1. Cihaz ayakta mı (ping)
+      2. Hangi kanallarda pompa fiziksel takılı (presence)
+      3. Tanımlı şurup tariflerinin kullandığı kanallar takılı mı
+         ve o kanalda yeterli şurup var mı
+
+    Sorun bulursa uyarı loglar ama açılışı engellemez — kahve
+    tarafı şurupsuz da çalışabilir.
+    """
+    from service.syrup_recipes import syrup_recipes, channel_name
+    from service import stock_service
+
     try:
-        result = await syrup.ping()
-        ok = bool(result.get("ok"))
-        log.info("Syrup Dispenser: %s", "bağlı" if ok else "yanıt yok")
-        return ok
+        pong = await syrup.ping()
     except Exception as e:
-        log.warning("Syrup Dispenser bağlantısı kurulamadı: %s", e)
+        log.warning("Syrup: cihaza ulaşılamadı (%s) — şuruplu içecekler denenmeyecek.", e)
         return False
+
+    if not pong.get("ok"):
+        log.warning("Syrup: PING yanıtı yok — cihaz kapalı veya meşgul olabilir.")
+        return False
+
+    log.info("Syrup: cihaz ayakta (ping ok).")
+
+    # Presence — hangi kanallar takılı
+    connected = {}
+    try:
+        motors = await syrup.list_motors()
+        connected = {m["motor"]: m["connected"] for m in motors.get("motors", [])}
+        takili = [ch for ch, c in connected.items() if c]
+        log.info("Syrup: takılı kanallar → %s", takili or "yok")
+    except Exception as e:
+        log.warning("Syrup: kanal durumu okunamadı (%s).", e)
+
+    # Tanımlı tariflerin kanalları sağlıklı mı
+    try:
+        syrup_stock = {row["channel"]: row for row in await stock_service.get_syrup_stock()}
+    except Exception:
+        syrup_stock = {}
+
+    for btn, recipe in (syrup_recipes or {}).items():
+        ch = recipe.get("channel")
+        need = recipe.get("ml", recipe.get("qty_ml", 0))
+        name = channel_name(ch)
+        if ch in connected and not connected[ch]:
+            log.warning("Syrup: '%s' tarifi kanal %d kullanıyor ama pompa TAKILI DEĞİL.", name, ch)
+        row = syrup_stock.get(ch)
+        if row and float(row["ml"]) < float(row["threshold"]):
+            log.warning("Syrup: kanal %d (%s) eşiğin altında — %.0f/%.0f ml. "
+                        "Bu kanalı kullanan içecekler engellenecek.",
+                        ch, name, float(row["ml"]), float(row["threshold"]))
+
+    return True
 
 
 # ══════════════════════════════════════════════

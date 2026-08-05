@@ -44,6 +44,36 @@ class ThresholdRequest(BaseModel):
 # ENDPOINTS
 # ─────────────────────────────────────────────
 
+class SyrupRefillRequest(BaseModel):
+    ml        : Optional[float] = None    # yeniden yazılır (eklenmez)
+    threshold : Optional[float] = None
+    capacity  : Optional[float] = None
+    name      : Optional[str]   = None
+
+
+@router.get("/stock/syrup", status_code=200)
+async def stock_syrup_list():
+    """Tüm şurup kanallarının stok durumu."""
+    return {"channels": await stock_service.get_syrup_stock()}
+
+
+@router.put("/stock/syrup/{channel}", status_code=200,
+            dependencies=[Depends(require_admin)])
+async def stock_syrup_refill(channel: int, req: SyrupRefillRequest):
+    """
+    Bir şurup kanalını günceller. ml YENİDEN YAZILIR (eklenmez).
+    """
+    if channel < 1 or channel > 8:
+        raise HTTPException(status_code=422, detail="Kanal 1–8 aralığında olmalı.")
+    try:
+        return await stock_service.refill_syrup(
+            channel, ml=req.ml, threshold=req.threshold,
+            capacity=req.capacity, name=req.name,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
 @router.get("/stock/status", status_code=200)
 async def stock_status():
     """

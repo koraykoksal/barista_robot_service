@@ -36,6 +36,7 @@ from core.database import (
     col_order_logs,
     col_refill_logs,
     col_stock,
+    col_syrup_stock,
     col_thresholds,
     ping as mongo_ping,
 )
@@ -165,6 +166,17 @@ class SyncService:
                 {"_id": "current"}, {"$set": payload["thresholds"]}, upsert=True
             )
 
+        elif kind in ("syrup_consume", "syrup_refill"):
+            syrup = payload.get("syrup")
+            if syrup:
+                ch = syrup["channel"]
+                await col_syrup_stock().update_one(
+                    {"_id": ch},
+                    {"$set": {k: syrup[k] for k in ("name", "ml", "threshold", "capacity")
+                              if k in syrup}},
+                    upsert=True,
+                )
+
         else:
             raise ValueError(f"Bilinmeyen kuyruk kaydı türü: {kind}")
 
@@ -241,7 +253,15 @@ async def bootstrap() -> Dict[str, Any]:
         except Exception as e:
             log.warning("İlk kurulumda MongoDB okunamadı, varsayılanlar kullanılacak: %s", e)
 
-    await asyncio.to_thread(sqlite_store.init, seed_stock, seed_thresholds)
+    # Şurup kanal adlarını channel_config'den tohumla — SQLite'ta
+    # ad boş kalmasın.
+    try:
+        from service.syrup_recipes import channel_config
+        seed_syrup = {ch: {"name": cfg.get("name")} for ch, cfg in channel_config.items()}
+    except Exception:
+        seed_syrup = None
+
+    await asyncio.to_thread(sqlite_store.init, seed_stock, seed_thresholds, seed_syrup)
 
     pending = await asyncio.to_thread(sqlite_store.outbox_count)
     if pending:

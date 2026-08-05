@@ -65,6 +65,33 @@ def parse_err_line(line: str) -> Dict[str, Any]:
     return result
 
 
+def _to_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+class SyrupAbortError(Exception):
+    """
+    Dozaj yarıda kesildi — cihaz EVT:DISP:ABORT gönderdi.
+
+    Genellikle pompanın mekanik ayrılmasından (REASON=DISCONNECTED)
+    olur. requested ve dispensed alanları telafi hesabı için taşınır:
+    reçete requested_ml istedi ama yalnızca dispensed_ml akıtılabildi.
+    """
+    def __init__(self, channel, reason, dispensed_ml, requested_ml, raw):
+        self.channel      = channel
+        self.reason       = reason
+        self.dispensed_ml = dispensed_ml
+        self.requested_ml = requested_ml
+        self.raw          = raw
+        super().__init__(
+            f"Dozaj yarıda kesildi (kanal {channel}, sebep={reason}): "
+            f"{dispensed_ml:.3f}/{requested_ml:.3f} mL akıtıldı."
+        )
+
+
 class SyrupDeviceError(Exception):
     """Cihazdan RSP:ERR yanıtı geldiğinde fırlatılır."""
     def __init__(self, parsed: Dict[str, Any]):
@@ -413,6 +440,24 @@ class SyrupService:
                         complete_raw = line
                         break
 
+                    elif line.startswith("EVT:DISP:ABORT"):
+                        # Dozaj yarıda kesildi — COMPLETE artık GELMEYECEK.
+                        # Kılavuz: COMPLETE ve ABORT'un ikisi de
+                        # sonlandırıcıdır; yalnızca COMPLETE beklemek
+                        # sonsuz bekleme üretir.
+                        fields = {}
+                        for token in line.split(":"):
+                            if "=" in token:
+                                k, _, v = token.partition("=")
+                                fields[k] = v
+                        raise SyrupAbortError(
+                            channel      = channel,
+                            reason       = fields.get("REASON", "UNKNOWN"),
+                            dispensed_ml = _to_float(fields.get("QTY"), 0.0),
+                            requested_ml = _to_float(fields.get("REQ"), qty_ml),
+                            raw          = line,
+                        )
+
                 except asyncio.TimeoutError:
                     continue
 
@@ -441,7 +486,7 @@ class SyrupService:
                 "complete_raw": complete_raw,
             }
 
-        except SyrupDeviceError:
+        except (SyrupAbortError, SyrupDeviceError):
             raise
         except (asyncio.TimeoutError, TimeoutError) as e:
             raise TimeoutError(str(e))

@@ -112,6 +112,18 @@ CREATE TABLE IF NOT EXISTS outbox (
 );
 CREATE INDEX IF NOT EXISTS ix_outbox_seq ON outbox(seq);
 
+-- Şurup kanalları — her kanal ayrı bir şurup, ml cinsinden.
+-- Ana malzemelerden (coffee/milk/choc/cups) ayrı tutulur çünkü
+-- kanal bazlı ve tarifler de kanala bağlı.
+CREATE TABLE IF NOT EXISTS syrup_stock (
+    channel     INTEGER PRIMARY KEY,   -- 1..8
+    name        TEXT,
+    ml          REAL    NOT NULL DEFAULT 0,
+    threshold   REAL    NOT NULL DEFAULT 50,
+    capacity    REAL    NOT NULL DEFAULT 1000,   -- şişe hacmi (dolum tavanı)
+    updated_at  TEXT
+);
+
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -121,6 +133,16 @@ CREATE TABLE IF NOT EXISTS meta (
 
 DEFAULT_STOCK = {"coffee_g": 700.0, "milk_ml": 5000.0, "choc_g": 500.0, "cups": 70}
 DEFAULT_THRESHOLDS = {"coffee_g": 50.0, "milk_ml": 350.0, "choc_g": 50.0, "cups": 2}
+
+# Şurup kanalları başlangıç değerleri. name/threshold/capacity ml.
+# channel_config ile hizalı; init'te üzerine yazılabilir.
+DEFAULT_SYRUP = {
+    1: {"name": "Vanilya",        "ml": 1000.0, "threshold": 50.0, "capacity": 1000.0},
+    2: {"name": "Karamel",        "ml": 1000.0, "threshold": 50.0, "capacity": 1000.0},
+    3: {"name": "Çikolata",       "ml": 1000.0, "threshold": 50.0, "capacity": 1000.0},
+    4: {"name": "Beyaz Çikolata", "ml": 1000.0, "threshold": 50.0, "capacity": 1000.0},
+    5: {"name": "Fındık",         "ml": 1000.0, "threshold": 50.0, "capacity": 1000.0},
+}
 
 
 def connect() -> sqlite3.Connection:
@@ -138,7 +160,8 @@ def connect() -> sqlite3.Connection:
     return _conn
 
 
-def init(seed_stock: Optional[Dict] = None, seed_thresholds: Optional[Dict] = None) -> None:
+def init(seed_stock: Optional[Dict] = None, seed_thresholds: Optional[Dict] = None,
+         seed_syrup: Optional[Dict] = None) -> None:
     """
     Şemayı kurar ve boşsa varsayılan satırları yazar.
 
@@ -173,6 +196,20 @@ def init(seed_stock: Optional[Dict] = None, seed_thresholds: Optional[Dict] = No
             )
             log.info("SQLite eşik satırı oluşturuldu: %s", values)
 
+        # Şurup kanalları — yoksa varsayılandan oluştur.
+        # seed_syrup verilirse (kanal adları channel_config'den) adlar
+        # ondan alınır.
+        existing = {r["channel"] for r in conn.execute("SELECT channel FROM syrup_stock").fetchall()}
+        seed_syrup = seed_syrup or {}
+        for ch, defaults in DEFAULT_SYRUP.items():
+            if ch in existing:
+                continue
+            name = seed_syrup.get(ch, {}).get("name", defaults["name"])
+            conn.execute(
+                "INSERT INTO syrup_stock (channel, name, ml, threshold, capacity, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (ch, name, defaults["ml"], defaults["threshold"], defaults["capacity"], _now_iso()),
+            )
         conn.commit()
 
 
@@ -203,6 +240,25 @@ def get_thresholds() -> Dict[str, Any]:
             "SELECT coffee_g, milk_ml, choc_g, cups, updated_at FROM thresholds WHERE id='current'"
         ).fetchone()
     return dict(row) if row else {**DEFAULT_THRESHOLDS, "updated_at": None}
+
+
+def get_syrup_stock() -> List[Dict[str, Any]]:
+    """Tüm şurup kanalları — stok durumu ekranı ve kapı kontrolü için."""
+    with _lock:
+        rows = connect().execute(
+            "SELECT channel, name, ml, threshold, capacity, updated_at "
+            "FROM syrup_stock ORDER BY channel"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_syrup_channel(channel: int) -> Optional[Dict[str, Any]]:
+    with _lock:
+        row = connect().execute(
+            "SELECT channel, name, ml, threshold, capacity, updated_at "
+            "FROM syrup_stock WHERE channel = ?", (int(channel),)
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def get_order_logs(limit: int = 50) -> List[Dict[str, Any]]:
@@ -318,6 +374,94 @@ def consume(
     return {"op_id": op_id, "consumed": {
         "coffee_g": coffee_g, "milk_ml": milk_ml, "choc_g": choc_g, "cups": int(cups)
     }, "remaining": remaining}
+
+
+def consume_syrup(channel: int, ml: float, job_id: str = "") -> Dict[str, Any]:
+    """
+    Bir şurup kanalından ml düşer ve kuyruğa ekler.
+    Negatife düşmez (MAX(0, ...)).
+    """
+    op_id = str(uuid.uuid4())
+    now = _now_iso()
+    ch = int(channel)
+
+    with _lock:
+        conn = connect()
+        try:
+            conn.execute("BEGIN")
+            conn.execute(
+                "UPDATE syrup_stock SET ml = MAX(0, ml - ?), updated_at = ? WHERE channel = ?",
+                (float(ml), now, ch),
+            )
+            row = conn.execute(
+                "SELECT channel, name, ml, threshold, capacity FROM syrup_stock WHERE channel = ?",
+                (ch,)
+            ).fetchone()
+            remaining = dict(row) if row else None
+
+            _queue(conn, op_id, "syrup_consume", {
+                "op_id": op_id, "channel": ch, "ml": float(ml),
+                "job_id": job_id,
+                "syrup": remaining, "at": now,
+            })
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    log.info("Şurup düşüldü [%s] kanal=%d -%.1fml → kalan %.1fml",
+             job_id[:8] or "-", ch, ml, remaining["ml"] if remaining else 0)
+    return {"op_id": op_id, "channel": ch, "consumed_ml": float(ml), "remaining": remaining}
+
+
+def refill_syrup(channel: int, ml: Optional[float] = None,
+                 threshold: Optional[float] = None,
+                 capacity: Optional[float] = None,
+                 name: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Şurup kanalını günceller. ml YENİDEN YAZILIR (eklenmez).
+    Verilmeyen alanlara dokunulmaz.
+    """
+    op_id = str(uuid.uuid4())
+    now = _now_iso()
+    ch = int(channel)
+
+    fields, params = [], []
+    for key, val in (("ml", ml), ("threshold", threshold),
+                     ("capacity", capacity), ("name", name)):
+        if val is None:
+            continue
+        if key != "name":
+            val = float(val)
+            if val < 0:
+                raise ValueError(f"{key} negatif olamaz.")
+        fields.append(f"{key} = ?")
+        params.append(val)
+
+    if not fields:
+        raise ValueError("En az bir alan belirtilmeli.")
+
+    with _lock:
+        conn = connect()
+        try:
+            conn.execute("BEGIN")
+            conn.execute(
+                f"UPDATE syrup_stock SET {', '.join(fields)}, updated_at = ? WHERE channel = ?",
+                (*params, now, ch),
+            )
+            row = conn.execute(
+                "SELECT channel, name, ml, threshold, capacity FROM syrup_stock WHERE channel = ?",
+                (ch,)
+            ).fetchone()
+            current = dict(row) if row else None
+            _queue(conn, op_id, "syrup_refill", {"op_id": op_id, "channel": ch, "syrup": current})
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    log.info("Şurup kanalı %d güncellendi → %s", ch, current)
+    return current
 
 
 def refill(values: Dict[str, Any], note: str = "") -> Dict[str, Any]:

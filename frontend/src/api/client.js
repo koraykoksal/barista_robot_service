@@ -105,6 +105,9 @@ export const ENDPOINTS = {
   stockThresholds: "/stock/thresholds",
   stockOrderLogs:  (limit = 30) => `/stock/logs/orders?limit=${limit}`,
   stockRefillLogs: (limit = 20) => `/stock/logs/refills?limit=${limit}`,
+
+  stockSyrup:       "/stock/syrup",
+  stockSyrupRefill: (channel) => `/stock/syrup/${channel}`,
 };
 
 /* ─────────────────────────────────────────────
