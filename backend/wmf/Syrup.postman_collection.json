@@ -1,0 +1,256 @@
+{
+  "info": {
+    "name": "Logorob — Syrup Sistemi (Tam)",
+    "description": "LogoSurup dispenser'ın TÜM uçlarının manuel testi — dozaj, kanal yapılandırması, tarifler, stok, ve bakım (PRIME / RETRACT / CLEAN).\n\nKULLANIM:\n1. Postman'da Import ile bu dosyayı içeri alın.\n2. Collection değişkenlerini kontrol edin:\n   - baseUrl: sunucu adresi (varsayılan http://127.0.0.1:8000, sonda / OLMADAN)\n   - adminToken: backend .env içindeki ADMIN_TOKEN ile AYNI olmalı (yalnızca 'Stok — Kanal Güncelle' kullanır)\n\nCİHAZ KAPALIYKEN:\n  - /syrup/ping → 200 + ok:false\n  - diğer /syrup/* → 503 (syrup_connection)\nSunucu çökmez.\n\nTEMİZLİK (CLEAN) SIRASI — operatör müdahalesi gerekir:\n  1. GET  /syrup/clean/lastresult  (opsiyonel: dozaj kilidi var mı)\n  2. POST /syrup/clean/start        → cihaz WAIT_SOAP'a gelir\n  3. Hortumu DETERJANLI suya daldırın\n  4. POST /syrup/clean/ack-soap     → yıkama, sonra WAIT_WATER\n  5. Hortumu TEMİZ suya daldırın\n  6. POST /syrup/clean/ack-water    → durulama, sonra COMPLETE\n  (İptal: POST /syrup/clean/abort)\n\nHata kodları: 422 geçersiz istek · 503 cihaz erişilemez · 504 zaman aşımı · 409 işlem sürüyor · 423 dozaj kilidi (E506).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:8000", "type": "string" },
+    { "key": "adminToken", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "1) Baglanti & Durum",
+      "item": [
+        {
+          "name": "Ping - cihaz ayakta mi",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/syrup/ping", "host": ["{{baseUrl}}"], "path": ["syrup", "ping"] },
+            "description": "CMD:SYS:PING -> RSP:SYS:PONG. Cihaz kapaliyken de 200 doner (ok:false)."
+          }
+        },
+        {
+          "name": "Motorlar - takili kanallar",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/syrup/motors", "host": ["{{baseUrl}}"], "path": ["syrup", "motors"] },
+            "description": "8 kanalin fiziksel baglanti durumu (EVT:IO:PRESENCE). Cihaz kapaliysa 503."
+          }
+        },
+        {
+          "name": "Presence Stream (SSE)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/syrup/presence/stream", "host": ["{{baseUrl}}"], "path": ["syrup", "presence", "stream"] },
+            "description": "Sise takma/cikarma olaylarini canli yayinlar (SSE).\n\nNOT: Postman SSE'yi tam gostermez. Terminalde daha net:\n  curl -N {{baseUrl}}/syrup/presence/stream"
+          }
+        }
+      ]
+    },
+    {
+      "name": "2) Dozaj",
+      "item": [
+        {
+          "name": "Dispense - motor + ml",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"motor\": 1,\n  \"ml\": 5\n}" },
+            "url": { "raw": "{{baseUrl}}/syrup/dispense", "host": ["{{baseUrl}}"], "path": ["syrup", "dispense"] },
+            "description": "CMD:DISP:CH=01:QTY=5:UNIT=ML\n\nAlan adlari esnek:\n  motor / channel -> kanal (1-8)\n  ml / qty_ml -> miktar (>0)\n  timeout -> opsiyonel (saniye)\n\nDozaj yarida kesilirse (EVT:DISP:ABORT) uc, akitilan/istenen mL bilgisiyle hata doner."
+          }
+        },
+        {
+          "name": "Dispense - channel + qty_ml + timeout",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"channel\": 3,\n  \"qty_ml\": 12.5,\n  \"timeout\": 20\n}" },
+            "url": { "raw": "{{baseUrl}}/syrup/dispense", "host": ["{{baseUrl}}"], "path": ["syrup", "dispense"] },
+            "description": "Ayni ucun alternatif alan adlariyla kullanimi."
+          }
+        },
+        {
+          "name": "Dispense - HATA: eksik alan (422)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{}" },
+            "url": { "raw": "{{baseUrl}}/syrup/dispense", "host": ["{{baseUrl}}"], "path": ["syrup", "dispense"] },
+            "description": "motor/channel ve ml/qty_ml eksik -> 422."
+          }
+        },
+        {
+          "name": "Dispense - HATA: kanal siniri (422)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"motor\": 9,\n  \"ml\": 5\n}" },
+            "url": { "raw": "{{baseUrl}}/syrup/dispense", "host": ["{{baseUrl}}"], "path": ["syrup", "dispense"] },
+            "description": "Motor 1-8 disinda -> 422."
+          }
+        }
+      ]
+    },
+    {
+      "name": "3) Hortum Bakimi - PRIME / RETRACT",
+      "item": [
+        {
+          "name": "Prime - vardiya basi hortum doldur",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/syrup/prime", "host": ["{{baseUrl}}"], "path": ["syrup", "prime"] },
+            "description": "CMD:SYS:PRIME - hortum uclarina surup getirir (vardiya basi).\n\nYalnizca suresi>0, takili ve kalibre kanallar dahil edilir. Hicbiri uygun degilse E502 (422) doner.\n\nYanit: { ok, channel_count, done_channels, elapsed_s }"
+          }
+        },
+        {
+          "name": "Retract - vardiya sonu hortum bosalt",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/syrup/retract", "host": ["{{baseUrl}}"], "path": ["syrup", "retract"] },
+            "description": "CMD:SYS:RETRACT - hortumdaki surubu kaba geri ceker (vardiya sonu). PRIME ile ayni akis."
+          }
+        }
+      ]
+    },
+    {
+      "name": "4) Hortum Temizligi - CLEAN",
+      "item": [
+        {
+          "name": "Clean LastResult - dozaj kilidi kontrolu",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/syrup/clean/lastresult", "host": ["{{baseUrl}}"], "path": ["syrup", "clean", "lastresult"] },
+            "description": "CMD:SYS:CLEAN:LASTRESULT - son temizlik sonucu.\n\nblocked=true -> onceki temizlik yarida kalmis, hatlarda deterjan olabilir; dozaj E506 (423) ile reddedilir. Dozaj oncesi bu kontrolu yapmak iyi bir uygulamadir.\n\nYanit: { ok, state: OK|INCOMPLETE, phase, blocked }"
+          }
+        },
+        {
+          "name": "Clean Status - mevcut durum",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/syrup/clean/status", "host": ["{{baseUrl}}"], "path": ["syrup", "clean", "status"] },
+            "description": "CMD:SYS:CLEAN:STATUS -> { state, remain_s }. Baglanti koptuktan sonra kaldiginiz yeri ogrenmek icin."
+          }
+        },
+        {
+          "name": "Clean Start - 1. adim (baslat)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/syrup/clean/start", "host": ["{{baseUrl}}"], "path": ["syrup", "clean", "start"] },
+            "description": "CMD:SYS:CLEAN:START - temizligi baslatir, cihaz WAIT_SOAP durumuna gelir.\n\n>> SONRAKI ADIM: Hortumu DETERJANLI suya daldirin, sonra 'Clean Ack Soap' gonderin.\n\nYanit: { ok, phase: WAIT_SOAP, complete, aborted }"
+          }
+        },
+        {
+          "name": "Clean Ack Soap - 2. adim (deterjan onayi)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/syrup/clean/ack-soap", "host": ["{{baseUrl}}"], "path": ["syrup", "clean", "ack-soap"] },
+            "description": "CMD:SYS:CLEAN:ACK_SOAP - deterjanli su hazir onayi. Yikama baslar, cihaz WAIT_WATER durumuna gelir.\n\n>> SONRAKI ADIM: Hortumu TEMIZ suya daldirin, sonra 'Clean Ack Water' gonderin.\n\nHatali asamada gonderilirse E505 (409) doner."
+          }
+        },
+        {
+          "name": "Clean Ack Water - 3. adim (temiz su onayi)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/syrup/clean/ack-water", "host": ["{{baseUrl}}"], "path": ["syrup", "clean", "ack-water"] },
+            "description": "CMD:SYS:CLEAN:ACK_WATER - temiz su hazir onayi. Durulama yapilir, sonra EVT:SYS:CLEAN:COMPLETE gelir ve varsa dozaj kilidi kalkar.\n\nYanit: { ok, phase: RINSE, complete }"
+          }
+        },
+        {
+          "name": "Clean Abort - iptal",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/syrup/clean/abort", "host": ["{{baseUrl}}"], "path": ["syrup", "clean", "abort"] },
+            "description": "CMD:SYS:CLEAN:ABORT - temizligi iptal eder, motorlari durdurur. Bekleme sirasinda istediginiz an gonderilebilir."
+          }
+        }
+      ]
+    },
+    {
+      "name": "5) Kanal Yapilandirmasi",
+      "item": [
+        {
+          "name": "Config - kanal adlarini getir",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/syrup/config", "host": ["{{baseUrl}}"], "path": ["syrup", "config"] },
+            "description": "Kanal -> surup adi / aciklama / renk haritasi."
+          }
+        },
+        {
+          "name": "Config - kanal guncelle",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Vanilya\",\n  \"description\": \"Sise 1\",\n  \"color\": \"#FFD700\"\n}" },
+            "url": { "raw": "{{baseUrl}}/syrup/config/1", "host": ["{{baseUrl}}"], "path": ["syrup", "config", "1"] },
+            "description": "URL sonundaki sayi kanal (1-8). name zorunlu; description/color opsiyonel."
+          }
+        }
+      ]
+    },
+    {
+      "name": "6) Icecek Tarifleri",
+      "item": [
+        {
+          "name": "Recipes - tumunu getir",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/syrup/recipes", "host": ["{{baseUrl}}"], "path": ["syrup", "recipes"] },
+            "description": "Icecek buton numarasi -> kanal & miktar haritasi."
+          }
+        },
+        {
+          "name": "Recipes - tarif kaydet (Latte)",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"channel\": 1,\n  \"ml\": 8,\n  \"note\": \"Latte vanilya\"\n}" },
+            "url": { "raw": "{{baseUrl}}/syrup/recipes/3", "host": ["{{baseUrl}}"], "path": ["syrup", "recipes", "3"] },
+            "description": "URL sonundaki sayi icecegin buton numarasi (Latte=3). channel (1-8) ve ml (>0) zorunlu; note opsiyonel."
+          }
+        },
+        {
+          "name": "Recipes - tarif sil (Latte)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/syrup/recipes/3", "host": ["{{baseUrl}}"], "path": ["syrup", "recipes", "3"] },
+            "description": "Belirtilen buton numarasinin surup tarifini siler."
+          }
+        }
+      ]
+    },
+    {
+      "name": "7) Surup Stogu",
+      "item": [
+        {
+          "name": "Stok - tum kanallarin durumu",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/stock/syrup", "host": ["{{baseUrl}}"], "path": ["stock", "syrup"] },
+            "description": "Her kanalin ml stogu, esigi ve kapasitesi. Korumasiz uc."
+          }
+        },
+        {
+          "name": "Stok - kanal guncelle (ADMIN)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Admin-Token", "value": "{{adminToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"ml\": 1000,\n  \"threshold\": 50\n}" },
+            "url": { "raw": "{{baseUrl}}/stock/syrup/1", "host": ["{{baseUrl}}"], "path": ["stock", "syrup", "1"] },
+            "description": "URL sonundaki sayi kanal (1-8). ml YENIDEN YAZILIR (eklenmez). threshold/capacity/name opsiyonel.\n\nX-Admin-Token GEREKLI - backend .env'deki ADMIN_TOKEN ile ayni olmali. Deger {{adminToken}} degiskenine yazin. Eslesmezse 401. Token bossa (backend'de de bossa) koruma kapalidir."
+          }
+        }
+      ]
+    }
+  ]
+}

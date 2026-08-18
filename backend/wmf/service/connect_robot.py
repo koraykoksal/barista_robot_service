@@ -50,11 +50,13 @@ class RobotConnection:
         """
         # Önce port erişilebilir mi kontrol et
         if not _tcp_reachable(self.robot_ip, ROBOT_XMLRPC_PORT, timeout=2.0):
-            print(f"[connect_robot] ⏳ XML-RPC port {ROBOT_XMLRPC_PORT} kapalı — robot henüz hazır değil.")
+            if verbose:
+                print(f"[connect_robot] ⏳ XML-RPC port {ROBOT_XMLRPC_PORT} kapalı — robot henüz hazır değil.")
             return False
 
         if not _tcp_reachable(self.robot_ip, ROBOT_REALTIME_PORT, timeout=2.0):
-            print(f"[connect_robot] ⏳ Realtime port {ROBOT_REALTIME_PORT} kapalı — robot henüz hazır değil.")
+            if verbose:
+                print(f"[connect_robot] ⏳ Realtime port {ROBOT_REALTIME_PORT} kapalı — robot henüz hazır değil.")
             return False
 
         # Portlar açık — is_conect flag sıfırla
@@ -123,7 +125,7 @@ class RobotConnection:
         self.rpc = None
 
 
-def connect_robot(robot_ip: str, retry: int = 3, wait_s: float = 2.0) -> Tuple[Optional[RPC], bool]:
+def connect_robot(robot_ip: str, retry: int = 3, wait_s: float = 2.0, verbose: bool = True) -> Tuple[Optional[RPC], bool]:
     """
     Yardımcı fonksiyon — robot_manager tarafından çağrılır.
 

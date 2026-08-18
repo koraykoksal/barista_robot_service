@@ -67,11 +67,21 @@ class RobotManager:
     # ══════════════════════════════════════════════
 
     def start(self) -> None:
-        print(f"[RobotManager] Başlatılıyor → {self.robot_ip}")
-        self._ensure_connected()
+        """
+        İzleme thread'ini başlatır ve HEMEN döner.
+
+        İlk bağlantı da monitor thread'i içinde kurulur; böylece robot
+        boot aşamasındayken (veya hiç yokken) start() açılışı bloke
+        etmez. Önceki sürüm burada _ensure_connected()'i senkron
+        çağırıyordu ve robot yokken uvicorn açılışı ~25 sn asılı
+        kalıyor, sonraki loglar (syrup dahil) görünmüyordu.
+
+        Bağlantının kurulup kurulmadığını _is_connected_quick() veya
+        /robot/status ucu bildirir.
+        """
+        print(f"[RobotManager] Başlatılıyor → {self.robot_ip} (bağlantı arka planda)")
         t = threading.Thread(target=self._monitor_loop, daemon=True, name="RobotMonitor")
         t.start()
-        print("[RobotManager] İzleme thread'i başlatıldı.")
 
     def stop(self) -> None:
         print("[RobotManager] Durduruluyor...")
@@ -177,19 +187,26 @@ class RobotManager:
             attempt = 0
             while not self._stop.is_set():
                 attempt += 1
-                print(f"[RobotManager] Bağlantı deneniyor #{attempt} → {self.robot_ip}")
-                rpc, ok = connect_robot(self.robot_ip, retry=1, wait_s=1.0)
+                # Log gürültüsünü kıs: ilk 3 deneme her seferinde, sonra
+                # yaklaşık dakikada bir (12 denemede bir). Robot yokken
+                # ekranı "port kapalı" satırlarıyla doldurmasın; syrup ve
+                # diğer açılış logları görünür kalsın. connect_robot'un
+                # kendi port-kapalı print'leri de bu bayrakla susturulur.
+                verbose = attempt <= 3 or attempt % 12 == 0
+                if verbose:
+                    print(f"[RobotManager] Bağlantı deneniyor #{attempt} → {self.robot_ip}")
+                rpc, ok = connect_robot(self.robot_ip, retry=1, wait_s=1.0, verbose=verbose)
                 if ok:
                     self.rpc = rpc
                     print("=" * 60)
-                    print(f"[RobotManager] ✅ Robot Bağlantısı kuruldu (deneme #{attempt})")
+                    print(f"[RobotManager] ✅ Robot bağlantısı kuruldu (deneme #{attempt})")
                     print("=" * 60)
                     time.sleep(1.5)   # realtime state paketinin dolması için
                     return
 
-                print(f"[RobotManager] ❌ Başarısız (#{attempt}), 5s sonra tekrar...")
-                # Portu kapalıysa (robot boot aşaması) daha sık log istemiyoruz
-                # 5s bekleyip tekrar dene — port açılınca connect_robot bağlanacak
+                if verbose:
+                    print(f"[RobotManager] ❌ Robot bağlanamadı (#{attempt}) — "
+                          f"arka planda denemeye devam ediliyor (5s aralık).")
                 time.sleep(5)
 
             print("[RobotManager] _ensure_connected: stop sinyali geldi, çıkılıyor.")
@@ -203,15 +220,19 @@ class RobotManager:
           - Otomatik olarak _ensure_connected() çağrılır
           - _ensure_connected() içinde eski RPC temizlenip yenisi oluşturulur
         """
+        first = True
         while not self._stop.is_set():
             ok = False
             with self._lock:
                 ok = self._is_connected_quick()
             if not ok:
-                print("[RobotManager] ⚠️  Bağlantı koptu — yeniden bağlanılıyor...")
+                if not first:
+                    print("[RobotManager] ⚠️  Bağlantı koptu — yeniden bağlanılıyor...")
                 self._ensure_connected()
                 if self.rpc is not None:
-                    print("[RobotManager] ✅ Monitor: yeniden bağlantı başarılı.")
+                    msg = "✅ Robot bağlandı." if first else "✅ Monitor: yeniden bağlantı başarılı."
+                    print(f"[RobotManager] {msg}")
+            first = False
             time.sleep(CHECK_INTERVAL_S)
 
     # ══════════════════════════════════════════════

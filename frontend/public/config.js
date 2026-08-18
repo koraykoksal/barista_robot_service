@@ -34,7 +34,7 @@
 window.__KIOSK_CONFIG__ = {
 
   // ── Backend adresi ──────────────────────────
-  // VITE_API_URL: "http://192.168.1.40:8000",
+  // VITE_API_URL: "http://192.168.1.44:8000",
 
   // ── Menü kategorileri ───────────────────────
   // Dondurma ünitesi olmayan kurulumda:

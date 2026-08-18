@@ -80,16 +80,22 @@ async def lifespan(app: FastAPI):
 
     await sync.start()
 
-    # ── Robot ──
-    robot_mgr.start()
-    log.info("RobotManager başlatıldı.")
-    robot_ok = await asyncio.to_thread(_check_robot)
-
     # ── Kahve makinesi izleyici ──
     monitor_ok = await _check_monitor()
 
     # ── Syrup dispenser ──
+    # Robottan ÖNCE çalışır: robot bağlantısı arka planda sürekli
+    # yeniden denendiği için, syrup kontrolünü onun arkasına koymak
+    # syrup loglarını geciktiriyordu.
     syrup_ok = await _check_syrup()
+
+    # ── Robot ──
+    # start() bağlantıyı ARKA PLANDA kurar ve koparsa yeniden dener.
+    # İlk denemeyi beklemek açılışı ~25 sn asıyordu; artık beklemiyoruz.
+    # Robotun hazır olup olmadığını /robot/status ucu bildirir.
+    robot_mgr.start()
+    log.info("RobotManager arka planda başlatıldı (bağlantı hazır olunca /robot/status bildirir).")
+    robot_ok = robot_mgr._is_connected_quick() if hasattr(robot_mgr, "_is_connected_quick") else False
 
     log.info("=" * 58)
     log.info("Hazır. Robot:%s | Monitor:%s | Syrup:%s | SQLite:%s | Mongo:%s",
@@ -145,16 +151,6 @@ async def lifespan(app: FastAPI):
 # STARTUP YARDIMCILARI
 # ══════════════════════════════════════════════
 
-def _check_robot() -> bool:
-    try:
-        robot_mgr._ensure_connected()
-        log.info("Robot bağlandı.")
-        return True
-    except Exception as e:
-        log.warning("Robot bağlantısı kurulamadı: %s", e)
-        return False
-
-
 async def _check_monitor() -> bool:
     """
     order_service sipariş öncesi monitor.get_state() çağırıyor;
@@ -172,60 +168,91 @@ async def _check_monitor() -> bool:
 
 async def _check_syrup() -> bool:
     """
-    Açılışta şurup sistemiyle haberleşip her şeyin yolunda olduğunu
-    doğrular:
+    Açılışta şurup sistemiyle haberleşip durumu raporlar:
 
       1. Cihaz ayakta mı (ping)
       2. Hangi kanallarda pompa fiziksel takılı (presence)
-      3. Tanımlı şurup tariflerinin kullandığı kanallar takılı mı
-         ve o kanalda yeterli şurup var mı
+      3. Tanımlı tariflerin kanalları takılı ve yeterli mi
 
-    Sorun bulursa uyarı loglar ama açılışı engellemez — kahve
-    tarafı şurupsuz da çalışabilir.
+    Her koşulda konsola/loga özet basar. Sorun bulsa da açılışı
+    engellemez — kahve tarafı şurupsuz çalışabilir.
+
+    Cihaza ulaşılamazsa SYRUP_TIMEOUT (varsayılan 15 sn) boyunca
+    beklememek için kontrol kısa bir zaman aşımıyla sarılır; açılış
+    asılı kalmaz.
     """
     from service.syrup_recipes import syrup_recipes, channel_name
     from service import stock_service
 
+    log.info("─" * 58)
+    log.info("🧴 Syrup sistemi kontrol ediliyor → %s:%s", syrup.host, syrup.port)
+
+    # ── 1) Ping ──
+    # Açılışı asmamak için en fazla ~6 sn bekle.
     try:
-        pong = await syrup.ping()
+        pong = await asyncio.wait_for(syrup.ping(), timeout=6.0)
+        ok = bool(pong.get("ok"))
+    except asyncio.TimeoutError:
+        log.warning("🧴 Syrup: cihaz %s:%s yanıt vermedi (zaman aşımı). "
+                    "Şuruplu içecekler denenmeyecek.", syrup.host, syrup.port)
+        log.info("─" * 58)
+        return False
     except Exception as e:
-        log.warning("Syrup: cihaza ulaşılamadı (%s) — şuruplu içecekler denenmeyecek.", e)
+        log.warning("🧴 Syrup: cihaza ulaşılamadı (%s). "
+                    "Şuruplu içecekler denenmeyecek.", e)
+        log.info("─" * 58)
         return False
 
-    if not pong.get("ok"):
-        log.warning("Syrup: PING yanıtı yok — cihaz kapalı veya meşgul olabilir.")
+    if not ok:
+        log.warning("🧴 Syrup: PING yanıtı yok — cihaz kapalı veya meşgul olabilir.")
+        log.info("─" * 58)
         return False
 
-    log.info("Syrup: cihaz ayakta (ping ok).")
+    log.info("🧴 Syrup: cihaz AYAKTA (ping ok).")
 
-    # Presence — hangi kanallar takılı
+    # ── 2) Presence — hangi kanallar takılı ──
     connected = {}
     try:
-        motors = await syrup.list_motors()
+        motors = await asyncio.wait_for(syrup.list_motors(), timeout=6.0)
         connected = {m["motor"]: m["connected"] for m in motors.get("motors", [])}
         takili = [ch for ch, c in connected.items() if c]
-        log.info("Syrup: takılı kanallar → %s", takili or "yok")
+        log.info("🧴 Syrup: takılı kanallar → %s", takili or "(hiçbiri)")
+    except asyncio.TimeoutError:
+        log.warning("🧴 Syrup: kanal durumu zaman aşımına uğradı.")
     except Exception as e:
-        log.warning("Syrup: kanal durumu okunamadı (%s).", e)
+        log.warning("🧴 Syrup: kanal durumu okunamadı (%s).", e)
 
-    # Tanımlı tariflerin kanalları sağlıklı mı
+    # ── 3) Tanımlı tariflerin kanalları sağlıklı mı ──
     try:
         syrup_stock = {row["channel"]: row for row in await stock_service.get_syrup_stock()}
     except Exception:
         syrup_stock = {}
 
-    for btn, recipe in (syrup_recipes or {}).items():
-        ch = recipe.get("channel")
-        need = recipe.get("ml", recipe.get("qty_ml", 0))
-        name = channel_name(ch)
-        if ch in connected and not connected[ch]:
-            log.warning("Syrup: '%s' tarifi kanal %d kullanıyor ama pompa TAKILI DEĞİL.", name, ch)
-        row = syrup_stock.get(ch)
-        if row and float(row["ml"]) < float(row["threshold"]):
-            log.warning("Syrup: kanal %d (%s) eşiğin altında — %.0f/%.0f ml. "
+    # Stok özeti — kaç kanal düşük
+    low = [r for r in syrup_stock.values() if float(r["ml"]) < float(r["threshold"])]
+    if low:
+        for r in low:
+            log.warning("🧴 Syrup: kanal %d (%s) eşiğin ALTINDA — %.0f/%.0f ml. "
                         "Bu kanalı kullanan içecekler engellenecek.",
-                        ch, name, float(row["ml"]), float(row["threshold"]))
+                        r["channel"], r.get("name"), float(r["ml"]), float(r["threshold"]))
+    else:
+        log.info("🧴 Syrup: tüm kanal stokları eşiğin üstünde.")
 
+    # Tarifi olan içeceklerin kanalları takılı mı
+    recipe_count = len(syrup_recipes or {})
+    if recipe_count:
+        for btn, recipe in syrup_recipes.items():
+            ch = recipe.get("channel")
+            name = channel_name(ch)
+            if ch in connected and not connected[ch]:
+                log.warning("🧴 Syrup: buton %s → '%s' tarifi kanal %d kullanıyor "
+                            "ama pompa TAKILI DEĞİL.", btn, name, ch)
+        log.info("🧴 Syrup: %d içecek tarifi tanımlı.", recipe_count)
+    else:
+        log.info("🧴 Syrup: tanımlı içecek tarifi yok (şurup opsiyonel).")
+
+    log.info("🧴 Syrup: kontrol tamam ✅")
+    log.info("─" * 58)
     return True
 
 

@@ -708,8 +708,22 @@ const StockManagement = () => {
       const res = await api.get(ENDPOINTS.stockStatus, { timeout: 5000 });
       try {
         const sy = await api.get(ENDPOINTS.stockSyrup, { timeout: 5000 });
-        setSyrups(sy.data?.channels ?? []);
-      } catch { /* şurup ucu yoksa yoksay */ }
+        const channels = sy.data?.channels ?? [];
+        setSyrups(channels);
+        if (channels.length === 0) {
+          console.warn("[Stock] /stock/syrup boş döndü — şurup bölümleri gizli kalır.");
+        }
+      } catch (e) {
+        // Şurup ucu yoksa (eski backend → 404) veya erişilemezse, şurup
+        // bölümleri gizlenir. Sessizce yutmak yerine sebebi konsola yaz —
+        // "görünmüyor" sorununun teşhisini kolaylaştırır.
+        setSyrups([]);
+        console.warn(
+          "[Stock] /stock/syrup alınamadı (%s) — şurup yenileme/eşik bölümleri "
+          + "gösterilmeyecek. Backend güncel mi ve bu ucu sunuyor mu kontrol edin.",
+          e?.response?.status || e?.message || "bilinmeyen hata"
+        );
+      }
       setStockData(res.data);
       const t = res.data?.thresholds || {};
       setThreshValues({
@@ -941,13 +955,12 @@ const StockManagement = () => {
           <h2 className="section-title" style={{ marginTop: 36 }}>Şurup Kanalları</h2>
           <p className="section-sub">
             Eşiğin altındaki kanalları kullanan içecekler sipariş edilemez
-            (dozaj yarıda kesilmesin diye). Miktar mevcut değerin yerine yazılır.
+            (dozaj yarıda kesilmesin diye). Düzenleme için “Yenileme &amp; Eşikler” sekmesine geçin.
           </p>
           <div className="stock-grid">
             {syrups.map((sy) => {
               const low = Number(sy.ml) < Number(sy.threshold);
               const pct = Math.min(100, Math.max(0, (Number(sy.ml) / Number(sy.capacity || 1000)) * 100));
-              const edit = syrupEdit[sy.channel] || {};
               return (
                 <div key={sy.channel} className={`stock-card ${low ? "critical" : "ok"}`}>
                   <div className="card-label">{sy.name || `Kanal ${sy.channel}`}</div>
@@ -959,15 +972,6 @@ const StockManagement = () => {
                   </div>
                   <div className="progress-wrap">
                     <div className={`progress-fill ${low ? "critical" : "ok"}`} style={{ width: `${pct}%` }} />
-                  </div>
-                  <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
-                    <input
-                      type="number" placeholder="ml"
-                      value={edit.ml ?? ""}
-                      onChange={(e) => setSyrupEdit((prev) => ({ ...prev, [sy.channel]: { ...edit, ml: e.target.value } }))}
-                      style={{ width: "50%", padding: "6px 8px", fontSize: 13 }}
-                    />
-                    <button className="btn-ghost" onClick={() => saveSyrup(sy.channel)}>Kaydet</button>
                   </div>
                 </div>
               );
@@ -1059,6 +1063,51 @@ const StockManagement = () => {
         ))}
         <button className="btn-secondary" onClick={handleThresholds}>Eşikleri Kaydet</button>
       </div>
+
+      {syrups.length > 0 && (
+        <div style={{ marginTop: 40 }}>
+          <h2 className="section-title">Şurup Kanalları — Miktar &amp; Eşik</h2>
+          <p className="section-sub">
+            Her kanal için miktar (ml) ve eşik ayrı ayrı güncellenir.
+            Girilen miktar mevcut değere <strong>eklenmez, yerine yazılır</strong>.
+            Boş bırakılan alanlara dokunulmaz.
+          </p>
+          {syrups.map((sy) => {
+            const edit = syrupEdit[sy.channel] || {};
+            const low = Number(sy.ml) < Number(sy.threshold);
+            return (
+              <div key={sy.channel} className="form-row" style={{ alignItems: "flex-end", gap: 12 }}>
+                <label className="form-label" style={{ minWidth: 130 }}>
+                  {sy.name || `Kanal ${sy.channel}`}
+                  <span className="td-muted" style={{ display: "block", fontSize: 11 }}>
+                    şu an {fmtNum(sy.ml)} ml {low && "· DÜŞÜK"}
+                  </span>
+                </label>
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  <span style={{ fontSize: 11, opacity: 0.6 }}>Miktar (ml)</span>
+                  <input
+                    className="form-input" type="number" placeholder={fmtNum(sy.ml)}
+                    value={edit.ml ?? ""}
+                    onChange={(e) => setSyrupEdit((prev) => ({ ...prev, [sy.channel]: { ...edit, ml: e.target.value } }))}
+                    style={{ width: 110 }}
+                  />
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  <span style={{ fontSize: 11, opacity: 0.6 }}>Eşik (ml)</span>
+                  <input
+                    className="form-input" type="number" placeholder={fmtNum(sy.threshold)}
+                    value={edit.threshold ?? ""}
+                    onChange={(e) => setSyrupEdit((prev) => ({ ...prev, [sy.channel]: { ...edit, threshold: e.target.value } }))}
+                    style={{ width: 110 }}
+                  />
+                </div>
+                <button className="btn-ghost" onClick={() => saveSyrup(sy.channel)}
+                        style={{ marginBottom: 2 }}>Kaydet</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </>
   );
 

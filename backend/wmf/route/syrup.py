@@ -365,3 +365,125 @@ async def syrup_recipe_delete(button_number: int):
         )
     removed = _syrup_recipes.pop(button_number)
     return {"ok": True, "button_number": button_number, "removed": removed}
+
+
+# ══════════════════════════════════════════════
+# BAKIM: PRIME / RETRACT / CLEAN
+# ══════════════════════════════════════════════
+
+def _syrup_error(e: Exception) -> HTTPException:
+    """PRIME/RETRACT/CLEAN uçları için ortak hata çevirici."""
+    if isinstance(e, SyrupDeviceError):
+        p = e.parsed
+        return HTTPException(status_code=p["http_status"], detail={
+            "source": "syrup_device", "error_code": p["error_code"],
+            "error_msg": p["error_msg"], "description": p["description"], "raw": p["raw"],
+        })
+    if isinstance(e, TimeoutError):
+        return HTTPException(status_code=504, detail={
+            "source": "syrup_timeout", "error_code": "TIMEOUT", "description": str(e)})
+    if isinstance(e, (ConnectionError, OSError)):
+        return HTTPException(status_code=503, detail={
+            "source": "syrup_connection", "error_code": "UNREACHABLE",
+            "description": str(e), "host": syrup.host, "port": syrup.port})
+    msg = str(e)
+    if any(x in msg.lower() for x in ("bağlan", "connect", "refused")):
+        return HTTPException(status_code=503, detail={
+            "source": "syrup_connection", "error_code": "UNREACHABLE",
+            "description": msg, "host": syrup.host, "port": syrup.port})
+    return HTTPException(status_code=500, detail={
+        "source": "syrup_internal", "error_code": "INTERNAL", "description": msg})
+
+
+@router.post("/prime", status_code=200)
+async def syrup_prime():
+    """
+    Vardiya başı — hortum uçlarına şurup getirir (CMD:SYS:PRIME).
+
+    Yalnızca süresi>0, takılı ve kalibre kanallar dahil edilir.
+    Hiçbiri uygun değilse cihaz E502 döner.
+    """
+    try:
+        return await syrup.prime()
+    except Exception as e:
+        raise _syrup_error(e)
+
+
+@router.post("/retract", status_code=200)
+async def syrup_retract():
+    """Vardiya sonu — hortumdaki şurubu kaba geri çeker (CMD:SYS:RETRACT)."""
+    try:
+        return await syrup.retract()
+    except Exception as e:
+        raise _syrup_error(e)
+
+
+@router.get("/clean/status", status_code=200)
+async def syrup_clean_status():
+    """Mevcut temizlik durumu (CMD:SYS:CLEAN:STATUS)."""
+    try:
+        return await syrup.clean_status()
+    except Exception as e:
+        raise _syrup_error(e)
+
+
+@router.get("/clean/lastresult", status_code=200)
+async def syrup_clean_lastresult():
+    """
+    Son temizlik sonucu (CMD:SYS:CLEAN:LASTRESULT).
+
+    blocked=true → önceki temizlik yarıda kalmış, hatlarda deterjan
+    olabilir; dozaj E506 ile reddedilir (gıda güvenliği kilidi).
+    Dozaj öncesi bu kontrolü yapmak iyi bir uygulamadır.
+    """
+    try:
+        return await syrup.clean_lastresult()
+    except Exception as e:
+        raise _syrup_error(e)
+
+
+@router.post("/clean/start", status_code=200)
+async def syrup_clean_start():
+    """
+    Temizliği başlatır (CMD:SYS:CLEAN:START).
+
+    Temizlik operatör müdahalesi gerektirir (kılavuz 4.3):
+      1. POST /syrup/clean/start   → cihaz WAIT_SOAP'a gelir
+      2. Hortumu deterjanlı suya daldırın
+      3. POST /syrup/clean/ack-soap → yıkama başlar, WAIT_WATER'a gelir
+      4. Hortumu temiz suya daldırın
+      5. POST /syrup/clean/ack-water → durulama, sonra COMPLETE
+
+    Onay gelmezse cihaz zaman aşımıyla iptal eder.
+    """
+    try:
+        return await syrup.clean_start()
+    except Exception as e:
+        raise _syrup_error(e)
+
+
+@router.post("/clean/ack-soap", status_code=200)
+async def syrup_clean_ack_soap():
+    """Deterjanlı su hazır onayı (CMD:SYS:CLEAN:ACK_SOAP) — 2. adım."""
+    try:
+        return await syrup.clean_ack_soap()
+    except Exception as e:
+        raise _syrup_error(e)
+
+
+@router.post("/clean/ack-water", status_code=200)
+async def syrup_clean_ack_water():
+    """Temiz su hazır onayı (CMD:SYS:CLEAN:ACK_WATER) — 3. adım."""
+    try:
+        return await syrup.clean_ack_water()
+    except Exception as e:
+        raise _syrup_error(e)
+
+
+@router.post("/clean/abort", status_code=200)
+async def syrup_clean_abort():
+    """Temizliği iptal eder, motorları durdurur (CMD:SYS:CLEAN:ABORT)."""
+    try:
+        return await syrup.clean_abort()
+    except Exception as e:
+        raise _syrup_error(e)

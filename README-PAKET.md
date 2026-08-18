@@ -356,7 +356,7 @@ Sondaki boşluk en sinsisi — editörde görünmüyor. Değerler artık
 kırpılıyor ve `true / 1 / yes / on` kabul ediliyor.
 
 Ayrıca ağ hatası mesajı denenen adresi de gösteriyor
-(`http://192.168.1.40:8000 adresine ulaşılamıyor.`).
+(`http://192.168.1.44:8000 adresine ulaşılamıyor.`).
 
 
 ---
@@ -934,6 +934,180 @@ Frontend: Karamel (düşük) → Tükendi, tıklanamıyor ✅
 Sync: şurup kuyruğu MongoDB'ye aktarıldı, iki taraf eşleşti ✅
 Stok sayfası: 5 kanal listeleniyor, Karamel düşük ✅
 ```
+
+
+---
+
+## Açılışta şurup kontrolü + robot artık açılışı asmıyor
+
+**Sorun:** `uvicorn app:app` çalıştırıldığında syrup kontrol çıktıları
+konsolda görünmüyordu. Sebep tek bir satırdı: `robot_mgr.start()`
+içinde `_ensure_connected()` **senkron** çağrılıyordu ve robot yokken
+~25 sn bloke ediyordu. Syrup kontrolü bu bloğun *arkasında* olduğu için
+çıktıları gecikiyor/görünmüyordu.
+
+Üç düzeltme:
+
+1. **`start()` artık bloke etmiyor.** İlk bağlantı da izleme thread'i
+   içinde kuruluyor; açılış anında dönüyor (ölçüldü: 0.0 sn). Robotun
+   durumunu `/robot/status` bildiriyor.
+
+2. **Sıra değişti** — syrup ve makine kontrolü artık robottan *önce*
+   çalışıyor, logları hemen görünüyor.
+
+3. **Robot log gürültüsü kısıldı** — "port kapalı" satırları ilk 3
+   denemeden sonra yaklaşık dakikada bire indi. Ekranı doldurup diğer
+   logları boğmuyor.
+
+Syrup kontrolü de zaman-sınırlı (her adım ≤6 sn) ve her koşulda özet
+basıyor:
+
+```
+🧴 Syrup sistemi kontrol ediliyor → 192.168.1.155:5000
+🧴 Syrup: cihaz AYAKTA (ping ok).
+🧴 Syrup: takılı kanallar → [1, 2, 3]
+🧴 Syrup: tüm kanal stokları eşiğin üstünde.
+🧴 Syrup: 2 içecek tarifi tanımlı.
+🧴 Syrup: kontrol tamam ✅
+```
+
+Cihaz kapalıysa ping 6 sn'de zaman aşımına uğrar, "cihaz yanıt vermedi"
+loglanır ve açılış devam eder.
+
+---
+
+## Stok sayfası: eşik güncelleme sekmelere ayrıldı
+
+İstenen düzen uygulandı:
+
+- **Güncel Stok** sekmesi artık salt görüntüleme — ana malzemeler ve
+  şurup kanalları okunur, düzenlenmez.
+- **Yenileme & Eşikler** sekmesinde tüm düzenleme: ana malzeme
+  yenileme, ana malzeme eşikleri, **ve yeni:** her şurup kanalı için
+  ayrı **Miktar (ml)** ve **Eşik (ml)** alanı.
+
+Önceki sürümde şurup eşiği hiçbir yerde düzenlenemiyordu; sadece miktar
+vardı ve o da Güncel Stok sekmesindeydi. Artık miktar ve eşik yan yana,
+Yenileme sekmesinde. Kaydetmeden önce özet onayı çıkıyor (miktar
+$set ile yazıldığı için).
+
+
+---
+
+## Şurup bakım komutları eklendi (PRIME / RETRACT / CLEAN)
+
+Kılavuzda olup sistemde olmayan bakım işlemleri eklendi. Backend artık
+LogoSurup'un tüm REMOTE komutlarını destekliyor.
+
+### Yeni uçlar
+
+| Uç | Protokol | İş |
+|---|---|---|
+| `POST /syrup/prime` | CMD:SYS:PRIME | Vardiya başı hortum doldurma |
+| `POST /syrup/retract` | CMD:SYS:RETRACT | Vardiya sonu hortum boşaltma |
+| `GET /syrup/clean/lastresult` | CMD:SYS:CLEAN:LASTRESULT | Dozaj kilidi kontrolü |
+| `GET /syrup/clean/status` | CMD:SYS:CLEAN:STATUS | Temizlik durumu |
+| `POST /syrup/clean/start` | CMD:SYS:CLEAN:START | Temizlik başlat (→ WAIT_SOAP) |
+| `POST /syrup/clean/ack-soap` | CMD:SYS:CLEAN:ACK_SOAP | Deterjan onayı (→ WASH) |
+| `POST /syrup/clean/ack-water` | CMD:SYS:CLEAN:ACK_WATER | Temiz su onayı (→ RINSE) |
+| `POST /syrup/clean/abort` | CMD:SYS:CLEAN:ABORT | Temizliği iptal et |
+
+### Temizlik akışı
+
+Operatör müdahalesi gerektiren çok adımlı el sıkışma:
+
+```
+start → cihaz WAIT_SOAP'a gelir
+  → hortumu deterjanlı suya daldır
+ack-soap → yıkama, cihaz WAIT_WATER'a gelir
+  → hortumu temiz suya daldır
+ack-water → durulama → COMPLETE
+```
+
+Her adım ayrı istek olarak çağrılır çünkü cihaz adımlar arasında
+fiziksel müdahale bekliyor.
+
+### Eksik hata kodları tamamlandı
+
+Kılavuzdaki tüm kodlar artık haritalanmış: E408 (504), E409 (409),
+E501/E503 (409), E502 (422), E505 (409) ve **E506 → HTTP 423 Locked**
+(temizlik yarıda kaldığında devreye giren gıda güvenliği dozaj kilidi).
+
+### Doğrulama
+
+Sahte bir LogoSurup cihazı yazıp protokol ayrıştırmasını test ettim:
+
+```
+PRIME     → channel_count=3, done_channels=[01,02,03], COMPLETE ✅
+RETRACT   → COMPLETE ✅
+CLEAN START     → phase=WAIT_SOAP ✅
+CLEAN ACK_SOAP  → phase=WASH ✅
+CLEAN ACK_WATER → phase=RINSE ✅
+LASTRESULT → blocked=false (kilit kontrolü) ✅
+```
+
+Cihaz kapalıyken 8 bakım ucunun tamamı temiz 503 (syrup_connection)
+döndü; sunucu çökmedi.
+
+### Postman collection güncellendi
+
+`Syrup.postman_collection.json` artık **22 istek, 7 klasör** —
+bağlantı, dozaj, PRIME/RETRACT, tam CLEAN akışı, kanal yapılandırması,
+tarifler ve stok. Temizlik klasöründe adımlar sıralı, her isteğin
+açıklamasında "sonraki adım" notu var. Collection'daki her istek gerçek
+sunucuda test edildi.
+
+
+---
+
+## Docker ile çalıştırma
+
+Backend ve frontend tek komutla ayağa kalkar. Ayrıntılar `DOCKER.md`'de.
+
+```bash
+# 1) backend ayarları
+cd backend/wmf && cp .env.example .env   # düzenleyin
+cd ../..
+
+# 2) compose ayarları (kiosk'un backend adresi)
+cp .env.docker.example .env              # KIOSK_API_URL'i ayarlayın
+
+# 3) başlat
+docker compose up -d --build
+```
+
+- Arayüz: `http://<host-ip>:8080`
+- API: `http://<host-ip>:8000`
+
+### Yeni dosyalar
+
+| Dosya | İş |
+|---|---|
+| `docker-compose.yml` | iki servisi orkestre eder |
+| `.env.docker.example` | compose değişkenleri şablonu |
+| `DOCKER.md` | kurulum ve sorun giderme rehberi |
+
+Backend ve frontend `Dockerfile`'ları ile `frontend/nginx.conf` zaten
+paketteydi; compose bunları birleştiriyor.
+
+### Tasarım notları
+
+- **Frontend API adresi derlemede gömülür.** Kiosk'un tarayıcısı
+  backend'e kendi makinesinden eriştiği için `KIOSK_API_URL`, konteyner
+  adı değil host'un gerçek adresi olmalı (örn. `http://192.168.1.44:8000`).
+  Değişince `--build` gerekir; ya da `public/config.js` ile derlemesiz.
+
+- **Donanım erişimi.** Cihazlara IP ile erişildiğinden varsayılan bridge
+  ağ yeterli. Cihaz keşfi gereken kurulumlarda backend'i `network_mode:
+  host`'a almak için `DOCKER.md`'de yönerge var.
+
+- **Veri kalıcılığı.** SQLite ve loglar adlandırılmış hacimlerde
+  (`backend-data`, `backend-logs`); `docker compose down` silmez.
+  Çift-DB tasarımında SQLite operasyonel kayıt olduğu için bu önemli.
+
+- **Sağlık kontrolleri.** Her iki servis de HEALTHCHECK içerir; frontend
+  backend sağlıklı olana dek beklenir (`depends_on: condition:
+  service_healthy`).
 
 
 ---

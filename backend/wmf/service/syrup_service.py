@@ -29,6 +29,13 @@ SYRUP_ERROR_CODES: Dict[str, str] = {
     "E405": "Kanal mekanik olarak bağlı değil — EVT:IO:PRESENCE ile kontrol edin",
     "E406": "Miktar çok küçük — mL miktarını artırın",
     "E407": "Miktar çok büyük — mL miktarını azaltın",
+    "E408": "Cihaz komutu işleyemeden zaman aşımına uğradı — komutu tekrarlayın",
+    "E409": "Kanalda dozaj sürüyor — COMPLETE/ABORT satırını bekleyin",
+    "E501": "İşlem sürüyor (temizlik/dolum) — bitmesini bekleyin",
+    "E502": "Uygun kanal yok — süreler girili, pompalar takılı ve kalibre mi kontrol edin",
+    "E503": "Dozaj sürerken işlem başlatılamaz — bitmesini bekleyin",
+    "E505": "Yanlış aşamada onay — CMD:SYS:CLEAN:STATUS ile durumu okuyun",
+    "E506": "Temizlik yarıda kalmış — hatlarda deterjan olabilir, dozaj kilitli (bölüm 6)",
 }
 
 SYRUP_ERROR_HTTP: Dict[str, int] = {
@@ -39,6 +46,13 @@ SYRUP_ERROR_HTTP: Dict[str, int] = {
     "E405": 503,
     "E406": 422,
     "E407": 422,
+    "E408": 504,
+    "E409": 409,
+    "E501": 409,
+    "E502": 422,
+    "E503": 409,
+    "E505": 409,
+    "E506": 423,   # 423 Locked — gıda güvenliği kilidi
 }
 
 
@@ -604,3 +618,238 @@ class SyrupService:
                     continue
 
             reconnect_delay = 2.0  # başarılı bağlantı sonrası sıfırla
+
+    # ─────────────────────────────────────────
+    # CMD 5 — PRIME / RETRACT  (hortum doldur/boşalt)
+    # ─────────────────────────────────────────
+
+    async def _run_sys_flow(self, command: str, label: str,
+                            overall_timeout: float = 120.0) -> Dict[str, Any]:
+        """
+        PRIME ve RETRACT ortak akışı (kılavuz 4.2).
+
+        → CMD:SYS:PRIME
+        ← RSP:SYS:PRIME:ACCEPT:CH=n:GROUP=g   (n = seçilen kanal sayısı)
+        ← EVT:SYS:PRIME:CH=01:DONE            (her kanal bitince)
+        ← EVT:SYS:PRIME:COMPLETE              (işlem bitti)
+
+        RETRACT aynı akışı RETRACT adıyla üretir. COMPLETE veya ABORT
+        gelene kadar (ya da zaman aşımına dek) olaylar toplanır.
+        """
+        t0 = time.monotonic()
+        r, w = await self._open()
+        try:
+            await self._collect_welcome(r, 0.5)
+            await self._auth(r, w)
+            await self._send(w, command)
+
+            accepted = False
+            channel_count = None
+            done_channels = []
+            deadline = time.monotonic() + overall_timeout
+
+            while time.monotonic() < deadline:
+                remain = deadline - time.monotonic()
+                try:
+                    line = await self._readline(r, timeout=min(remain, 10.0))
+                except asyncio.TimeoutError:
+                    continue
+                if not line:
+                    continue
+
+                self._check_err(line)   # RSP:ERR → SyrupDeviceError
+
+                if line.startswith(f"RSP:SYS:{label}:ACCEPT"):
+                    accepted = True
+                    for token in line.split(":"):
+                        if token.startswith("CH="):
+                            channel_count = _to_float(token[3:], None)
+                    print(f"[SyrupService] {label} kabul edildi (kanal sayısı={channel_count})")
+
+                elif line.startswith(f"EVT:SYS:{label}:") and ":DONE" in line:
+                    for token in line.split(":"):
+                        if token.startswith("CH="):
+                            done_channels.append(token[3:])
+
+                elif line.startswith(f"EVT:SYS:{label}:COMPLETE"):
+                    return {
+                        "ok": True, "operation": label.lower(),
+                        "channel_count": channel_count,
+                        "done_channels": done_channels,
+                        "elapsed_s": round(time.monotonic() - t0, 2),
+                    }
+
+                elif line.startswith(f"EVT:SYS:{label}:ABORT"):
+                    reason = ""
+                    for token in line.split(":"):
+                        if token.startswith("REASON="):
+                            reason = token[7:]
+                    return {
+                        "ok": False, "operation": label.lower(), "aborted": True,
+                        "reason": reason, "done_channels": done_channels,
+                        "elapsed_s": round(time.monotonic() - t0, 2),
+                    }
+
+            return {"ok": False, "operation": label.lower(),
+                    "error": "timeout", "accepted": accepted,
+                    "done_channels": done_channels}
+        finally:
+            await self._close(w)
+
+    async def prime(self) -> Dict[str, Any]:
+        """Vardiya başı — hortum uçlarına şurup getirir (CMD:SYS:PRIME)."""
+        return await self._run_sys_flow("CMD:SYS:PRIME", "PRIME")
+
+    async def retract(self) -> Dict[str, Any]:
+        """Vardiya sonu — hortumdaki şurubu kaba geri çeker (CMD:SYS:RETRACT)."""
+        return await self._run_sys_flow("CMD:SYS:RETRACT", "RETRACT")
+
+    # ─────────────────────────────────────────
+    # CMD 6 — CLEAN  (hortum temizliği, çok adımlı)
+    # ─────────────────────────────────────────
+
+    async def clean_status(self) -> Dict[str, Any]:
+        """
+        CMD:SYS:CLEAN:STATUS → mevcut temizlik durumu.
+        ← RSP:SYS:CLEAN:STATE=<durum>:REMAIN=<sn>
+        """
+        r, w = await self._open()
+        try:
+            await self._collect_welcome(r, 0.5)
+            await self._auth(r, w)
+            await self._send(w, "CMD:SYS:CLEAN:STATUS")
+            deadline = time.monotonic() + self.timeout
+            while time.monotonic() < deadline:
+                try:
+                    line = await self._readline(r, timeout=self.timeout)
+                except asyncio.TimeoutError:
+                    break
+                if not line:
+                    continue
+                self._check_err(line)
+                if line.startswith("RSP:SYS:CLEAN:STATE") or "CLEAN:STATE" in line:
+                    fields = {}
+                    for token in line.split(":"):
+                        if "=" in token:
+                            k, _, v = token.partition("=")
+                            fields[k] = v
+                    return {"ok": True, "state": fields.get("STATE"),
+                            "remain_s": _to_float(fields.get("REMAIN"), None), "raw": line}
+            return {"ok": False, "error": "no_status_response"}
+        finally:
+            await self._close(w)
+
+    async def clean_lastresult(self) -> Dict[str, Any]:
+        """
+        CMD:SYS:CLEAN:LASTRESULT → son temizlik sonucu (dozaj kilidi kontrolü).
+        ← RSP:SYS:CLEAN:LASTRESULT:STATE=OK
+        ← RSP:SYS:CLEAN:LASTRESULT:STATE=INCOMPLETE:PHASE=WASH:BLOCKED=1
+        """
+        r, w = await self._open()
+        try:
+            await self._collect_welcome(r, 0.5)
+            await self._auth(r, w)
+            await self._send(w, "CMD:SYS:CLEAN:LASTRESULT")
+            deadline = time.monotonic() + self.timeout
+            while time.monotonic() < deadline:
+                try:
+                    line = await self._readline(r, timeout=self.timeout)
+                except asyncio.TimeoutError:
+                    break
+                if not line:
+                    continue
+                self._check_err(line)
+                if "CLEAN:LASTRESULT" in line:
+                    fields = {}
+                    for token in line.split(":"):
+                        if "=" in token:
+                            k, _, v = token.partition("=")
+                            fields[k] = v
+                    blocked = fields.get("BLOCKED") == "1"
+                    return {"ok": True, "state": fields.get("STATE"),
+                            "phase": fields.get("PHASE"), "blocked": blocked, "raw": line}
+            return {"ok": False, "error": "no_response"}
+        finally:
+            await self._close(w)
+
+    async def clean_start(self) -> Dict[str, Any]:
+        """
+        Temizliği başlatır (CMD:SYS:CLEAN:START) ve ilk bekleme aşamasına
+        (WAIT_SOAP) kadar ilerler.
+
+        Temizlik operatör müdahalesi gerektirir (kılavuz 4.3): deterjanlı
+        suya daldırma → ACK_SOAP → yıkama → temiz suya daldırma →
+        ACK_WATER → durulama. Bu uç yalnızca START gönderip WAIT_SOAP'a
+        kadar olan durumu döndürür; sonraki adımlar ack_soap / ack_water
+        ile ayrı çağrılır.
+        """
+        return await self._clean_command("CMD:SYS:CLEAN:START",
+                                          wait_for=("WAIT_SOAP", "WAIT_WATER", "COMPLETE"))
+
+    async def clean_ack_soap(self) -> Dict[str, Any]:
+        """Deterjanlı su hazır onayı (CMD:SYS:CLEAN:ACK_SOAP)."""
+        return await self._clean_command("CMD:SYS:CLEAN:ACK_SOAP",
+                                          wait_for=("WAIT_WATER", "COMPLETE", "PHASE=WASH"))
+
+    async def clean_ack_water(self) -> Dict[str, Any]:
+        """Temiz su hazır onayı (CMD:SYS:CLEAN:ACK_WATER)."""
+        return await self._clean_command("CMD:SYS:CLEAN:ACK_WATER",
+                                          wait_for=("COMPLETE", "PHASE=RINSE"))
+
+    async def clean_abort(self) -> Dict[str, Any]:
+        """Temizliği iptal eder, motorları durdurur (CMD:SYS:CLEAN:ABORT)."""
+        return await self._clean_command("CMD:SYS:CLEAN:ABORT",
+                                          wait_for=("ABORT", "COMPLETE"))
+
+    async def _clean_command(self, command: str, wait_for: tuple,
+                             timeout: float = 60.0) -> Dict[str, Any]:
+        """
+        Bir CLEAN komutu gönderir ve wait_for içindeki işaretlerden biri
+        gelene kadar olayları toplar. Temizlik adımları arasında cihaz
+        operatör müdahalesi beklediği için her adım ayrı istek olarak
+        çağrılır (uzun süreli tek bağlantı yerine).
+        """
+        t0 = time.monotonic()
+        r, w = await self._open()
+        try:
+            await self._collect_welcome(r, 0.5)
+            await self._auth(r, w)
+            await self._send(w, command)
+
+            events = []
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                remain = deadline - time.monotonic()
+                try:
+                    line = await self._readline(r, timeout=min(remain, 10.0))
+                except asyncio.TimeoutError:
+                    continue
+                if not line:
+                    continue
+                self._check_err(line)
+                events.append(line)
+
+                # PHASE / WAIT / COMPLETE / ABORT işaretlerini kontrol et
+                if any(marker in line for marker in wait_for):
+                    phase = None
+                    for token in line.split(":"):
+                        if token.startswith("PHASE="):
+                            phase = token[6:]
+                        elif token.startswith("WAIT_"):
+                            phase = token
+                    complete = "COMPLETE" in line
+                    aborted = "ABORT" in line
+                    return {
+                        "ok": not aborted,
+                        "command": command.split(":")[-1],
+                        "phase": phase,
+                        "complete": complete,
+                        "aborted": aborted,
+                        "events": events,
+                        "elapsed_s": round(time.monotonic() - t0, 2),
+                    }
+
+            return {"ok": False, "command": command.split(":")[-1],
+                    "error": "timeout", "events": events}
+        finally:
+            await self._close(w)

@@ -22,7 +22,7 @@ RUN npm ci
 COPY . .
 
 # Vite ortam değişkenlerini DERLEME anında okur.
-# docker build --build-arg VITE_API_URL=http://192.168.1.40:8000 ...
+# docker build --build-arg VITE_API_URL=http://192.168.1.44:8000 ...
 ARG VITE_API_URL=http://127.0.0.1:8000
 ARG VITE_ADMIN_TOKEN=
 ENV VITE_API_URL=$VITE_API_URL
