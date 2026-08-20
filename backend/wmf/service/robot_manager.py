@@ -843,3 +843,48 @@ class RobotManager:
 
         print("[RobotManager] ⏰ Manuel mod geçiş timeout (10s).")
         return False
+
+    # ══════════════════════════════════════════════
+    # SİSTEM DEĞİŞKENLERİ (SysVar)
+    # ══════════════════════════════════════════════
+    # Robot programına siparişin TİPİNİ bildirmek için kullanılır.
+    # DO ile fark: DO tek bir "şimdi şunu yap" darbesidir; SysVar ise
+    # robot bardağı almadan ÖNCE okunup rotanın tamamını belirler
+    # (buz istasyonuna uğrayacak mı, şurup istasyonuna uğrayacak mı).
+    #
+    # ⚠️  SDK id aralığı [1~20] — 0 GEÇERSİZDİR. Robot programındaki
+    # "SysVar0/SysVar1" adlandırması core/config.py içinde 1 ve 2'ye
+    # eşlenir; robot tarafındaki değişken indeksi buna uymalıdır.
+
+    def set_sysvar(self, sysvar_id: int, value: float) -> int:
+        """
+        Sistem değişkenine değer yazar.
+
+        SDK: SetSysVarValue(id, value) — value float olarak gönderilir.
+
+        Returns:
+            0  → başarı
+           -1  → robot bağlı değil
+           -2  → exception
+           >0  → SDK hata kodu
+        """
+        sysvar_id = int(sysvar_id)
+        if not 1 <= sysvar_id <= 20:
+            print(f"[RobotManager] ❌ set_sysvar: id={sysvar_id} aralık dışı "
+                  f"(SDK [1~20] bekliyor).")
+            return -3
+        return self._sdk_call("SetSysVarValue", sysvar_id, float(value))
+
+    def read_sysvar(self, sysvar_id: int):
+        """
+        Sistem değişkenini okur. (err, value) döner; hata varsa value None.
+        Teşhis içindir — sipariş akışı bunu kullanmaz.
+        """
+        with self._lock:
+            if not self._is_connected_quick():
+                return -1, None
+            try:
+                return self.rpc.GetSysVarValue(int(sysvar_id))
+            except Exception as e:
+                print(f"[RobotManager] ❌ read_sysvar exception: {e}")
+                return -2, None

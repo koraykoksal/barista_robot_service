@@ -864,6 +864,7 @@ const StockManagement = () => {
     const payload = {};
     if (edit.ml !== undefined && edit.ml !== "") payload.ml = Number(edit.ml);
     if (edit.threshold !== undefined && edit.threshold !== "") payload.threshold = Number(edit.threshold);
+    if (edit.dose_ml !== undefined && edit.dose_ml !== "") payload.dose_ml = Number(edit.dose_ml);
     if (Object.keys(payload).length === 0) return;
 
     const ch = syrups.find((x) => x.channel === channel);
@@ -871,6 +872,8 @@ const StockManagement = () => {
       `${ch?.name ?? "Kanal " + channel} güncellenecek:\n\n` +
       (payload.ml !== undefined ? `  Miktar: ${fmtNum(ch?.ml)} → ${payload.ml} ml\n` : "") +
       (payload.threshold !== undefined ? `  Eşik: ${fmtNum(ch?.threshold)} → ${payload.threshold} ml\n` : "") +
+      (payload.dose_ml !== undefined
+        ? `  Doz: ${fmtNum(ch?.dose_ml, 1)} → ${payload.dose_ml} ml  (her siparişte akacak)\n` : "") +
       "\nMiktar mevcut değere eklenmez, yerine yazılır.\n\nOnaylıyor musunuz?"
     );
     if (!confirmed) return;
@@ -961,17 +964,20 @@ const StockManagement = () => {
             {syrups.map((sy) => {
               const low = Number(sy.ml) < Number(sy.threshold);
               const pct = Math.min(100, Math.max(0, (Number(sy.ml) / Number(sy.capacity || 1000)) * 100));
+              // Sınıf adı .crit — "critical" yazılınca hiçbir CSS kuralına
+              // uymuyor ve düşük kanal kırmızıya dönmüyordu.
               return (
-                <div key={sy.channel} className={`stock-card ${low ? "critical" : "ok"}`}>
+                <div key={sy.channel} className={`stock-card ${low ? "crit" : "ok"}`}>
                   <div className="card-label">{sy.name || `Kanal ${sy.channel}`}</div>
-                  <div className={`card-value ${low ? "critical" : "ok"}`}>
+                  <div className={`card-value ${low ? "crit" : "ok"}`}>
                     {fmtNum(sy.ml)}<span className="card-unit">ml</span>
                   </div>
                   <div className="card-threshold">
-                    Eşik: {fmtNum(sy.threshold)} ml {low && "· DÜŞÜK"}
+                    Eşik: {fmtNum(sy.threshold)} ml · doz {fmtNum(sy.dose_ml, 1)} ml
+                    {low && " · DÜŞÜK"}
                   </div>
                   <div className="progress-wrap">
-                    <div className={`progress-fill ${low ? "critical" : "ok"}`} style={{ width: `${pct}%` }} />
+                    <div className={`progress-fill ${low ? "crit" : "ok"}`} style={{ width: `${pct}%` }} />
                   </div>
                 </div>
               );
@@ -1066,9 +1072,13 @@ const StockManagement = () => {
 
       {syrups.length > 0 && (
         <div style={{ marginTop: 40 }}>
-          <h2 className="section-title">Şurup Kanalları — Miktar &amp; Eşik</h2>
+          <h2 className="section-title">Şurup Kanalları — Miktar, Eşik &amp; Doz</h2>
           <p className="section-sub">
-            Her kanal için miktar (ml) ve eşik ayrı ayrı güncellenir.
+            <strong>Miktar</strong> şişede kalan, <strong>eşik</strong> altına
+            düşünce o kanalı kullanan içeceklerin kapatıldığı sınır,
+            <strong> doz</strong> ise her siparişte akıtılacak mL.
+            Müşteri arayüzde yalnızca şurubu seçer; kaç mL akacağını bu alan
+            belirler.<br />
             Girilen miktar mevcut değere <strong>eklenmez, yerine yazılır</strong>.
             Boş bırakılan alanlara dokunulmaz.
           </p>
@@ -1098,6 +1108,15 @@ const StockManagement = () => {
                     className="form-input" type="number" placeholder={fmtNum(sy.threshold)}
                     value={edit.threshold ?? ""}
                     onChange={(e) => setSyrupEdit((prev) => ({ ...prev, [sy.channel]: { ...edit, threshold: e.target.value } }))}
+                    style={{ width: 110 }}
+                  />
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  <span style={{ fontSize: 11, opacity: 0.6 }}>Doz (ml)</span>
+                  <input
+                    className="form-input" type="number" step="0.5" placeholder={fmtNum(sy.dose_ml, 1)}
+                    value={edit.dose_ml ?? ""}
+                    onChange={(e) => setSyrupEdit((prev) => ({ ...prev, [sy.channel]: { ...edit, dose_ml: e.target.value } }))}
                     style={{ width: 110 }}
                   />
                 </div>

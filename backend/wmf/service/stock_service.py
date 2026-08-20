@@ -31,6 +31,7 @@ DEĞİŞENLER:
   • print() yerine loglama
 """
 
+import asyncio
 from typing import Any, Dict, List, Optional
 
 from core import catalog, sqlite_store
@@ -112,6 +113,7 @@ async def get_stock_status() -> Dict[str, Any]:
         syrup_channels[ch] = {
             "channel": ch, "name": row.get("name"),
             "ml": ml, "threshold": th, "capacity": float(row.get("capacity", 0)),
+            "dose_ml": float(row.get("dose_ml") or 0),
             "low": low,
         }
         if low:
@@ -258,10 +260,10 @@ async def consume_syrup(channel: int, ml: float, job_id: str = "") -> Dict[str, 
 
 
 async def refill_syrup(channel: int, ml=None, threshold=None,
-                       capacity=None, name=None) -> Dict[str, Any]:
+                       capacity=None, name=None, dose_ml=None) -> Dict[str, Any]:
     import asyncio
     return await asyncio.to_thread(
-        sqlite_store.refill_syrup, int(channel), ml, threshold, capacity, name
+        sqlite_store.refill_syrup, int(channel), ml, threshold, capacity, name, dose_ml
     )
 
 
@@ -290,6 +292,76 @@ async def check_syrup_available(channel: int, need_ml: float) -> Dict[str, Any]:
         "threshold": th,
         "need_ml": float(need_ml),
         "reason": None if enough else ("below_threshold" if ml < th else "insufficient"),
+    }
+
+
+async def resolve_syrup_selection(channels: List[Any]) -> Dict[str, Any]:
+    """
+    Müşterinin seçtiği şurup kanallarını akıtılabilir bir doz listesine
+    çevirir ve stok kapısını uygular.
+
+    Kaç mL akacağı kanalın kendi `dose_ml` değerinden gelir — sipariş
+    mesajı miktar taşımaz. Böylece personel /stock sayfasından dozu
+    değiştirdiğinde arayüzde hiçbir şey güncellenmesi gerekmez.
+
+    Aynı kanal birden çok kez seçilmişse bir kez akıtılır: sıralı dozaj
+    sırasında aynı pompayı iki kez çalıştırmak reçeteyi bozar.
+
+    Dönen:
+      ok      : tüm kanallar akıtılabilir mi
+      items   : [{channel, name, dose_ml}] — SIRAYLA akıtılacak liste
+      total_ml: toplam miktar (log için)
+      blocked : ilk engelin ayrıntısı; ok=True ise None
+    """
+    items: List[Dict[str, Any]] = []
+    seen: set = set()
+
+    for raw in channels or []:
+        try:
+            ch = int(raw)
+        except (TypeError, ValueError):
+            return {"ok": False, "items": [], "total_ml": 0.0, "blocked": {
+                "channel": raw, "reason": "invalid_channel",
+                "message": f"Geçersiz şurup kanalı: {raw!r}",
+            }}
+
+        if ch in seen:
+            continue
+        seen.add(ch)
+
+        row = await asyncio.to_thread(sqlite_store.get_syrup_channel, ch)
+        if not row:
+            return {"ok": False, "items": [], "total_ml": 0.0, "blocked": {
+                "channel": ch, "reason": "channel_missing",
+                "message": f"Kanal {ch} tanımlı değil.",
+            }}
+
+        dose = float(row.get("dose_ml") or 0)
+        name = row.get("name") or f"Kanal {ch}"
+        if dose <= 0:
+            return {"ok": False, "items": [], "total_ml": 0.0, "blocked": {
+                "channel": ch, "name": name, "reason": "dose_not_set",
+                "message": f"{name} için doz (mL) tanımlı değil — "
+                           f"stok sayfasından ayarlayın.",
+            }}
+
+        avail = await check_syrup_available(ch, dose)
+        if not avail["ok"]:
+            return {"ok": False, "items": [], "total_ml": 0.0, "blocked": {
+                "channel": ch, "name": name,
+                "reason": avail.get("reason"),
+                "remaining_ml": avail.get("remaining_ml"),
+                "need_ml": dose,
+                "message": f"{name} şurubu yetersiz — bu içecek geçici olarak verilemiyor.",
+            }}
+
+        items.append({"channel": ch, "name": name, "dose_ml": dose})
+
+    return {
+        "ok": True,
+        "items": items,
+        "total_ml": sum(i["dose_ml"] for i in items),
+        "blocked": None,
     }
 
 

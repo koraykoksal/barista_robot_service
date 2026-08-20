@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from core.machine_errors import describe_machine_errors
+from core.machine_errors import describe_machine_errors, describe_with_texts
 from service.registry import robot_mgr, monitor, machine_info
 
 router = APIRouter()
@@ -47,9 +47,13 @@ async def machine_status():
     blocking = state.get("blocking_errors") or []
     errors   = state.get("errors") or []
 
+    # Makinenin kendi "Error Text" açıklaması varsa o önceliklidir;
+    # yerel kod→metin tablosu sahadaki her kodu içermiyor.
+    texts = state.get("error_texts") or {}
+
     state["error_description"] = (
-        describe_machine_errors(blocking) if blocking
-        else describe_machine_errors(errors) if errors
+        describe_with_texts(blocking, texts) if blocking
+        else describe_with_texts(errors, texts) if errors
         else None
     )
     return state

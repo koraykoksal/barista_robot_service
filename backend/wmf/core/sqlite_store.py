@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.applog import get_logger
-from core.config import APP_ROOT, SQLITE_PATH
+from core.config import APP_ROOT, SQLITE_PATH, SYRUP_DEFAULT_DOSE_ML
 
 log = get_logger(__name__)
 
@@ -115,12 +115,16 @@ CREATE INDEX IF NOT EXISTS ix_outbox_seq ON outbox(seq);
 -- Şurup kanalları — her kanal ayrı bir şurup, ml cinsinden.
 -- Ana malzemelerden (coffee/milk/choc/cups) ayrı tutulur çünkü
 -- kanal bazlı ve tarifler de kanala bağlı.
+-- dose_ml: bu kanaldan bir siparişte akıtılacak miktar. Sipariş bazlı
+-- değil kanal bazlı: müşteri "vanilya" seçer, kaç mL akacağını personel
+-- /stock sayfasından belirler.
 CREATE TABLE IF NOT EXISTS syrup_stock (
     channel     INTEGER PRIMARY KEY,   -- 1..8
     name        TEXT,
     ml          REAL    NOT NULL DEFAULT 0,
     threshold   REAL    NOT NULL DEFAULT 50,
     capacity    REAL    NOT NULL DEFAULT 1000,   -- şişe hacmi (dolum tavanı)
+    dose_ml     REAL    NOT NULL DEFAULT 8,      -- sipariş başına akıtılan
     updated_at  TEXT
 );
 
@@ -142,7 +146,12 @@ DEFAULT_SYRUP = {
     3: {"name": "Çikolata",       "ml": 1000.0, "threshold": 50.0, "capacity": 1000.0},
     4: {"name": "Beyaz Çikolata", "ml": 1000.0, "threshold": 50.0, "capacity": 1000.0},
     5: {"name": "Fındık",         "ml": 1000.0, "threshold": 50.0, "capacity": 1000.0},
+    6: {"name": "Çilek",          "ml": 1000.0, "threshold": 50.0, "capacity": 1000.0},
 }
+
+# Şurup kanalı satırlarında okunan/yazılan alanlar — tek yerde tutulur ki
+# yeni bir sütun eklendiğinde beş ayrı SELECT'i güncellemek gerekmesin.
+_SYRUP_COLUMNS = "channel, name, ml, threshold, capacity, dose_ml, updated_at"
 
 
 def connect() -> sqlite3.Connection:
@@ -196,6 +205,8 @@ def init(seed_stock: Optional[Dict] = None, seed_thresholds: Optional[Dict] = No
             )
             log.info("SQLite eşik satırı oluşturuldu: %s", values)
 
+        _migrate(conn)
+
         # Şurup kanalları — yoksa varsayılandan oluştur.
         # seed_syrup verilirse (kanal adları channel_config'den) adlar
         # ondan alınır.
@@ -206,11 +217,31 @@ def init(seed_stock: Optional[Dict] = None, seed_thresholds: Optional[Dict] = No
                 continue
             name = seed_syrup.get(ch, {}).get("name", defaults["name"])
             conn.execute(
-                "INSERT INTO syrup_stock (channel, name, ml, threshold, capacity, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (ch, name, defaults["ml"], defaults["threshold"], defaults["capacity"], _now_iso()),
+                "INSERT INTO syrup_stock "
+                "(channel, name, ml, threshold, capacity, dose_ml, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (ch, name, defaults["ml"], defaults["threshold"], defaults["capacity"],
+                 float(SYRUP_DEFAULT_DOSE_ML), _now_iso()),
             )
         conn.commit()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """
+    Şema geçişleri.
+
+    CREATE TABLE IF NOT EXISTS mevcut bir tabloyu DEĞİŞTİRMEZ — sahada
+    zaten kiosk.db bulunan kurulumlarda yeni sütun kendiliğinden gelmez.
+    Eksik sütunlar burada tek tek eklenir; işlem tekrar çalıştırılabilir.
+    """
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(syrup_stock)").fetchall()}
+    if "dose_ml" not in cols:
+        conn.execute(
+            f"ALTER TABLE syrup_stock ADD COLUMN dose_ml REAL NOT NULL "
+            f"DEFAULT {float(SYRUP_DEFAULT_DOSE_ML)}"
+        )
+        log.info("SQLite geçişi: syrup_stock.dose_ml sütunu eklendi "
+                 "(varsayılan %.1f mL).", float(SYRUP_DEFAULT_DOSE_ML))
 
 
 def close() -> None:
@@ -246,8 +277,7 @@ def get_syrup_stock() -> List[Dict[str, Any]]:
     """Tüm şurup kanalları — stok durumu ekranı ve kapı kontrolü için."""
     with _lock:
         rows = connect().execute(
-            "SELECT channel, name, ml, threshold, capacity, updated_at "
-            "FROM syrup_stock ORDER BY channel"
+            f"SELECT {_SYRUP_COLUMNS} FROM syrup_stock ORDER BY channel"
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -255,8 +285,7 @@ def get_syrup_stock() -> List[Dict[str, Any]]:
 def get_syrup_channel(channel: int) -> Optional[Dict[str, Any]]:
     with _lock:
         row = connect().execute(
-            "SELECT channel, name, ml, threshold, capacity, updated_at "
-            "FROM syrup_stock WHERE channel = ?", (int(channel),)
+            f"SELECT {_SYRUP_COLUMNS} FROM syrup_stock WHERE channel = ?", (int(channel),)
         ).fetchone()
     return dict(row) if row else None
 
@@ -394,8 +423,7 @@ def consume_syrup(channel: int, ml: float, job_id: str = "") -> Dict[str, Any]:
                 (float(ml), now, ch),
             )
             row = conn.execute(
-                "SELECT channel, name, ml, threshold, capacity FROM syrup_stock WHERE channel = ?",
-                (ch,)
+                f"SELECT {_SYRUP_COLUMNS} FROM syrup_stock WHERE channel = ?", (ch,)
             ).fetchone()
             remaining = dict(row) if row else None
 
@@ -417,7 +445,8 @@ def consume_syrup(channel: int, ml: float, job_id: str = "") -> Dict[str, Any]:
 def refill_syrup(channel: int, ml: Optional[float] = None,
                  threshold: Optional[float] = None,
                  capacity: Optional[float] = None,
-                 name: Optional[str] = None) -> Dict[str, Any]:
+                 name: Optional[str] = None,
+                 dose_ml: Optional[float] = None) -> Dict[str, Any]:
     """
     Şurup kanalını günceller. ml YENİDEN YAZILIR (eklenmez).
     Verilmeyen alanlara dokunulmaz.
@@ -428,7 +457,7 @@ def refill_syrup(channel: int, ml: Optional[float] = None,
 
     fields, params = [], []
     for key, val in (("ml", ml), ("threshold", threshold),
-                     ("capacity", capacity), ("name", name)):
+                     ("capacity", capacity), ("dose_ml", dose_ml), ("name", name)):
         if val is None:
             continue
         if key != "name":
@@ -450,8 +479,7 @@ def refill_syrup(channel: int, ml: Optional[float] = None,
                 (*params, now, ch),
             )
             row = conn.execute(
-                "SELECT channel, name, ml, threshold, capacity FROM syrup_stock WHERE channel = ?",
-                (ch,)
+                f"SELECT {_SYRUP_COLUMNS} FROM syrup_stock WHERE channel = ?", (ch,)
             ).fetchone()
             current = dict(row) if row else None
             _queue(conn, op_id, "syrup_refill", {"op_id": op_id, "channel": ch, "syrup": current})

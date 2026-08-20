@@ -40,7 +40,7 @@ channel_config: Dict[int, Dict[str, str]] = {
     3: {"name": "Çikolata",       "description": "", "color": "#4E2600"},
     4: {"name": "Beyaz Çikolata", "description": "", "color": "#FFF8F0"},
     5: {"name": "Fındık",         "description": "", "color": "#7B4F00"},
-    6: {"name": "Kanal 6",        "description": "", "color": ""},
+    6: {"name": "Çilek",          "description": "", "color": "#E5352A"},
     7: {"name": "Kanal 7",        "description": "", "color": ""},
     8: {"name": "Kanal 8",        "description": "", "color": ""},
 }

@@ -45,43 +45,61 @@ from typing import Any, Dict, List, Optional
 #                 startPushDispensingFinished olayıyla değişecek;
 #                 şimdilik ilerleme çubuğu için referans)
 # category      : "coffee" | "ice_cream"
+# temperature   : "hot" | "iced" — BUZ İSTASYONUNU BU ALAN TETİKLER.
+#                 "iced" yazan içeceklerde robot bardağı aldıktan sonra
+#                 buz istasyonuna uğrar (SysVar ile bildirilir).
+#                 Alanı olmayan kayıtlar "hot" sayılır.
+# ice_water     : True → buz istasyonunda buz + SU alınır (SysVar3 = 1).
+#                 Alanı olmayan kayıtlarda yalnızca buz alınır.
+#                 Yalnızca temperature="iced" iken anlamlıdır.
 
 BEVERAGES: List[Dict[str, Any]] = [
     {
         "button": 1,  "recipe": 1,
         "name_tr": "Espresso",   "name_en": "Espresso",
         "uses_coffee": True,  "uses_milk": False, "uses_choc": False,
-        "brew_seconds": 23, "category": "coffee",
+        "brew_seconds": 23, "category": "coffee", "temperature": "hot",
     },
     {
         "button": 2,  "recipe": 5,
         "name_tr": "Americano",  "name_en": "Americano",
         "uses_coffee": True,  "uses_milk": False, "uses_choc": False,
-        "brew_seconds": 38, "category": "coffee",
+        "brew_seconds": 38, "category": "coffee", "temperature": "hot",
     },
     {
         "button": 3,  "recipe": 91,
         "name_tr": "Latte",      "name_en": "Latte",
         "uses_coffee": True,  "uses_milk": True,  "uses_choc": False,
-        "brew_seconds": 40, "category": "coffee",
+        "brew_seconds": 40, "category": "coffee", "temperature": "hot",
     },
     {
         "button": 5,  "recipe": 3,
         "name_tr": "Ristretto",  "name_en": "Ristretto",
         "uses_coffee": True,  "uses_milk": False, "uses_choc": False,
-        "brew_seconds": 20, "category": "coffee",
+        "brew_seconds": 20, "category": "coffee", "temperature": "hot",
+    },
+    {
+        # Iced Latte — makine sütlü içeceği hazırlar, buzu robot ekler.
+        # brew_seconds değeri frontend/src/api/mock.js içindeki tablodan
+        # alındı; makinenin GERÇEK süresiyle doğrulanmalı. Bu sayı robotun
+        # bardağı ne zaman alacağını belirler: kısa olursa içecek eksik
+        # kalır, uzun olursa robot boşta bekler.
+        "button": 7,  "recipe": 7,
+        "name_tr": "Iced Latte", "name_en": "Iced Latte",
+        "uses_coffee": True,  "uses_milk": True,  "uses_choc": False,
+        "brew_seconds": 34, "category": "coffee", "temperature": "iced",
     },
     {
         "button": 12, "recipe": 88,
         "name_tr": "Cappuccino", "name_en": "Cappuccino",
         "uses_coffee": True,  "uses_milk": True,  "uses_choc": False,
-        "brew_seconds": 28, "category": "coffee",
+        "brew_seconds": 28, "category": "coffee", "temperature": "hot",
     },
     {
         "button": 14, "recipe": 95,
         "name_tr": "Sütlü Çikolata", "name_en": "Hot Chocolate",
         "uses_coffee": False, "uses_milk": True,  "uses_choc": True,
-        "brew_seconds": 41, "category": "coffee",
+        "brew_seconds": 41, "category": "coffee", "temperature": "hot",
     },
 ]
 
@@ -148,6 +166,40 @@ def brew_seconds(button: Any) -> int:
     return int(item["brew_seconds"]) if item else 0
 
 
+def temperature(button: Any) -> str:
+    """'hot' | 'iced'. Katalogda yoksa veya alan boşsa 'hot'."""
+    item = get(button)
+    return (item or {}).get("temperature") or "hot"
+
+
+def is_iced(button: Any) -> bool:
+    """
+    Bu içecek buz istasyonuna uğramalı mı?
+
+    Sipariş akışı bunu yalnızca istek gövdesinde açık bir `ice` bayrağı
+    GELMEDİĞİNDE kullanır — katalogda olmayan içecekler (ör. çevrimdışı
+    demo kayıtları) için arayüzün bildirdiği değer geçerlidir.
+    """
+    return temperature(button) == "iced"
+
+
+def is_ice_water(button: Any) -> bool:
+    """
+    Buz istasyonunda SU DA alınacak mı?
+
+    Robot buz haznesinden yalnızca buz mu, yoksa buz + su mu alacağını
+    kendi bilemez; bu bilgi SysVar ile önceden bildirilir:
+
+        SysVar3 = 0 → yalnızca buz
+        SysVar3 = 1 → buz + su
+
+    Katalog kaydında `ice_water: True` yazan içecekler su da alır.
+    Alan yoksa yalnızca buz varsayılır. `is_iced` gibi, istek gövdesinde
+    açık bir değer gelirse o önceliklidir.
+    """
+    return bool((get(button) or {}).get("ice_water", False))
+
+
 def ingredients(button: Any) -> Dict[str, bool]:
     """
     İçeceğin hangi malzemeleri tükettiği.
@@ -181,6 +233,8 @@ def as_public_list(lang: str = "tr") -> List[Dict[str, Any]]:
             "name_tr":      b["name_tr"],
             "name_en":      b["name_en"],
             "category":     b["category"],
+            "temperature":  b.get("temperature", "hot"),
+            "ice_water":    bool(b.get("ice_water", False)),
             "uses_coffee":  b["uses_coffee"],
             "uses_milk":    b["uses_milk"],
             "uses_choc":    b["uses_choc"],

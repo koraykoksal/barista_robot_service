@@ -12,15 +12,13 @@ Sipariş ile ilgili endpoint'ler:
 import asyncio
 import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from service.registry     import coffee, monitor
-from service.order_service import run_order_flow
-from service import stock_service
-from service.syrup_recipes import get_syrup_recipe
+from service.order_service import order_type_label, plan_syrups, run_order_flow
 from core.applog import log, log_order_detail
 from core.machine_errors import describe_machine_errors
 from core import catalog
@@ -33,7 +31,26 @@ router = APIRouter()
 # ─────────────────────────────────────────────
 
 class SendRequest(BaseModel):
-    message: Dict[str, Any]
+    """
+    Sipariş isteği.
+
+    `message` kahve makinesine olduğu gibi iletilen ham WMF komutudur.
+    `ice` ve `syrups` ise ROBOT rotasını belirler — makineye gitmezler:
+
+      ice       : True → robot buz istasyonuna uğrar (SysVar ile bildirilir).
+                  Verilmezse içeceğin katalogdaki `temperature` alanına bakılır.
+      ice_water : True → buz haznesinden buz + SU alınır (SysVar3 = 1),
+                  False → yalnızca buz (SysVar3 = 0). `ice` False iken
+                  anlamsızdır. Verilmezse katalogdaki `ice_water` alanı.
+      syrups    : müşterinin seçtiği kanal numaraları [1..8]. Doluysa robot
+                  şurup istasyonuna uğrar ve bu kanallardan SIRAYLA akıtılır.
+                  Kaç mL akacağı burada değil, kanalın kendi dose_ml
+                  değerinde tutulur (/stock sayfasından düzenlenir).
+    """
+    message   : Dict[str, Any]
+    ice       : Optional[bool] = None
+    ice_water : Optional[bool] = None
+    syrups    : List[int]      = Field(default_factory=list)
 
 
 # ─────────────────────────────────────────────
@@ -63,7 +80,16 @@ async def order_standart(request: SendRequest, http_request: Request):
     client_ip     = http_request.client.host if http_request.client else "?"
     job_id        = str(uuid.uuid4())
 
+    # Buz bayrakları gelmezse içeceğin katalog kaydından türetilir.
+    use_ice   = catalog.is_iced(button_number) if request.ice is None else bool(request.ice)
+    ice_water = (catalog.is_ice_water(button_number)
+                 if request.ice_water is None else bool(request.ice_water))
+
     log_order_detail(job_id, request.message, client_ip)
+    log(job_id, "ROUTE",
+        f"{order_type_label(use_ice, bool(request.syrups))} | "
+        f"buz={'buz + su' if (use_ice and ice_water) else 'buz' if use_ice else 'yok'} | "
+        f"şurup kanalları={request.syrups or 'yok'}")
 
     # Çakışan sipariş kontrolü
     async with _active_task_lock:
@@ -90,11 +116,14 @@ async def order_standart(request: SendRequest, http_request: Request):
         global _active_task
         async with _order_flow_lock:
             await run_order_flow(
-                job_id        = job_id,
-                message       = request.message,
-                button_number = button_number,
-                jobs          = _jobs,
-                jobs_lock     = _jobs_lock,
+                job_id         = job_id,
+                message        = request.message,
+                button_number  = button_number,
+                jobs           = _jobs,
+                jobs_lock      = _jobs_lock,
+                ice            = use_ice,
+                ice_water      = ice_water,
+                syrup_channels = request.syrups,
             )
         async with _active_task_lock:
             current = asyncio.current_task()
@@ -146,28 +175,16 @@ async def check_beverage(request: SendRequest, http_request: Request):
     print(f"[CHECK_BEVERAGE] {now} | IP={client_ip} | {bev_name} (btn={btn_raw})")
 
     # ── Şurup kapısı ──
-    # İçeceğin şurup tarifi varsa, o kanalda yeterli şurup olduğunu
-    # sipariş BAŞLAMADAN doğrula. Yetersizse makineye hiç gitmeden
-    # engelle — böylece dozaj yarıda kesilip (EVT:DISP:ABORT) reçete
-    # eksik kalmaz.
-    syrup_block = None
-    recipe = get_syrup_recipe(btn_int)
-    if recipe:
-        channel = recipe.get("channel")
-        need_ml = recipe.get("ml", recipe.get("qty_ml", 0))
-        if channel and need_ml:
-            avail = await stock_service.check_syrup_available(channel, float(need_ml))
-            if not avail["ok"]:
-                syrup_block = {
-                    "channel": channel,
-                    "name": avail.get("name"),
-                    "remaining_ml": avail.get("remaining_ml"),
-                    "need_ml": avail.get("need_ml"),
-                    "reason": avail.get("reason"),
-                    "message": f"{avail.get('name', f'Kanal {channel}')} şurubu yetersiz — "
-                               f"bu içecek geçici olarak verilemiyor.",
-                }
-                print(f"[CHECK_BEVERAGE] ⛔ Şurup kapısı: {syrup_block['message']}")
+    # Müşterinin seçtiği kanallarda yeterli şurup olduğunu sipariş
+    # BAŞLAMADAN doğrula. Yetersizse makineye hiç gitmeden engelle —
+    # böylece bardak boşuna alınmaz ve dozaj yarıda kesilip
+    # (EVT:DISP:ABORT) reçete eksik kalmaz.
+    #
+    # Kanal gelmezse içeceğin sabit tarifi denenir (bkz. plan_syrups).
+    plan = await plan_syrups(btn_int, request.syrups)
+    syrup_block = plan["blocked"] if not plan["ok"] else None
+    if syrup_block:
+        print(f"[CHECK_BEVERAGE] ⛔ Şurup kapısı: {syrup_block.get('message')}")
 
     try:
         # Şurup engeli varsa makineye hiç sormadan engelleyici yanıt dön.

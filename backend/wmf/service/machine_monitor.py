@@ -130,6 +130,7 @@ class MachineMonitor:
             "has_error"          : False,  # herhangi bir hata var mı (blocking + non-blocking)
             "has_blocking_error" : False,  # sadece sipariş engelleyen hatalar
             "errors"             : [],     # tüm aktif hata kodları [int]
+            "error_texts"        : {},     # kod → makinenin verdiği açıklama
             "blocking_errors"    : [],     # sadece blocking hata kodları [int]
             "cleaning"           : None,   # aktif cleaning bildirimi payload'u
             "rinsing"            : None,   # aktif rinsing bildirimi payload'u
@@ -282,11 +283,21 @@ class MachineMonitor:
         # Payload içindeki tüm key-value'ları düz sözlüğe çıkar
         func           = None
         info           = None
-        error_code     = None
+        error_entries  = []     # [(kod, makinenin verdiği metin)] — SIRAYLA
         notif_type     = None   # "type" key'i — cleaning/rinsing türü
         due_seconds    = None   # "dueInSeconds"
         duration_secs  = None   # "durationInSeconds"
 
+        # DÜZELTİLEN HATA: burada tek bir error_code değişkeni vardı ve
+        # her "ErrorCode" onun üzerine yazıyordu. currentErrors paketi
+        # birden fazla hata taşıdığında (sahada olağan) yalnızca SONUNCUSU
+        # kaydediliyor, diğerleri sessizce düşüyordu. Örnek gerçek payload:
+        #   ErrorCode 687, 184, 747, 672  →  yalnızca 672 görünüyordu.
+        # Artık hepsi toplanıp tek tek işleniyor.
+        #
+        # "Error Text" makinenin kendi açıklaması; kodun hemen ardından
+        # gelir. Kod→metin tablomuzda karşılığı olmayan kodlarda bile
+        # kullanıcıya anlamlı bir mesaj gösterebilmek için saklanır.
         for item in payload:
             if not isinstance(item, dict):
                 continue
@@ -298,7 +309,11 @@ class MachineMonitor:
             if "Info" in item:
                 info = item["Info"]
             if "ErrorCode" in item:
-                error_code = item["ErrorCode"]
+                error_entries.append([item["ErrorCode"], ""])
+            if "Error Text" in item and error_entries:
+                text = str(item["Error Text"] or "").strip()
+                if text and not error_entries[-1][1]:
+                    error_entries[-1][1] = text
 
             # startPushCleaningRinsingNotifications alanları (API dok. sayfa 35)
             if "type" in item:
@@ -310,7 +325,11 @@ class MachineMonitor:
 
         # ── startPushErrors işleme ──────────────────────────────────
         if func == "startPushErrors":
-            await self._handle_push_error(info, error_code)
+            if not error_entries:
+                # returnvalue paketi — yalnızca abone onayı
+                await self._handle_push_error(info, None, "")
+            for code, text in error_entries:
+                await self._handle_push_error(info, code, text)
 
         # ── startPushCleaningRinsingNotifications işleme ────────────
         elif func == "startPushCleaningRinsingNotifications":
@@ -318,10 +337,15 @@ class MachineMonitor:
 
     # ── startPushErrors yardımcısı ──────────────────────────────────────
 
-    async def _handle_push_error(self, info: Any, code: Any) -> None:
+    async def _handle_push_error(self, info: Any, code: Any, text: str = "") -> None:
         """
         Hata ekleme / kaldırma mantığı.
         API dok. sayfa 26.
+
+        `text` makinenin kendi açıklamasıdır ("Süt boş, lütfen
+        tamamlayın."). Kod→metin tablomuzda karşılığı olmayan kodlarda
+        kullanıcıya bunu göstermek "Makine hatası (kod: 747)" demekten
+        çok daha faydalı.
         """
         if code is None:
             # returnvalue paketi — sadece abone onayı, hata bilgisi yok
@@ -356,8 +380,14 @@ class MachineMonitor:
                     errors.append(code_int)
                 print(f"[MachineMonitor] ⚠️  Bilinmeyen Info='{info}', hata eklendi → ErrorCode={code_int}")
 
+            texts = dict(self.state.get("error_texts") or {})
+            if text:
+                texts[code_int] = text
+            texts = {k: v for k, v in texts.items() if k in errors}
+
             blocking = [e for e in errors if e not in NON_BLOCKING_ERROR_CODES]
             self.state["errors"]             = errors
+            self.state["error_texts"]        = texts
             self.state["blocking_errors"]    = blocking
             self.state["has_error"]          = len(errors) > 0
             self.state["has_blocking_error"] = len(blocking) > 0

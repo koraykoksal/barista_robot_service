@@ -43,7 +43,14 @@ robot_mgr = RobotManager(ROBOT_IP)
 # ─────────────────────────────────────────────
 # KAHVE MAKİNESİ
 # ─────────────────────────────────────────────
-coffee = CoffeeService()
+# Adres ve token .env'den gelir. Önceden CoffeeService() argümansız
+# kuruluyor, sınıf da değerleri kendi içinde sabit tutuyordu — sipariş
+# akışı .env'i görmüyordu.
+coffee = CoffeeService(
+    ip    = COFFEE_MACHINE_IP,
+    port  = COFFEE_MACHINE_PORT,
+    token = COFFEE_MACHINE_TOKEN,
+)
 
 monitor = MachineMonitor(
     ip    = COFFEE_MACHINE_IP,

@@ -48,6 +48,7 @@ class SyrupRefillRequest(BaseModel):
     ml        : Optional[float] = None    # yeniden yazılır (eklenmez)
     threshold : Optional[float] = None
     capacity  : Optional[float] = None
+    dose_ml   : Optional[float] = None    # sipariş başına akıtılacak miktar
     name      : Optional[str]   = None
 
 
@@ -68,7 +69,7 @@ async def stock_syrup_refill(channel: int, req: SyrupRefillRequest):
     try:
         return await stock_service.refill_syrup(
             channel, ml=req.ml, threshold=req.threshold,
-            capacity=req.capacity, name=req.name,
+            capacity=req.capacity, name=req.name, dose_ml=req.dose_ml,
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))

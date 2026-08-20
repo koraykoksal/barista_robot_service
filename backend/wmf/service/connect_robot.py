@@ -32,8 +32,9 @@ def _tcp_reachable(ip: str, port: int, timeout: float = 2.0) -> bool:
 
 
 class RobotConnection:
-    def __init__(self, robot_ip: str):
+    def __init__(self, robot_ip: str, verbose: bool = True):
         self.robot_ip = robot_ip
+        self.verbose  = verbose
         self.rpc: Optional[RPC] = None
 
     def connect(self) -> bool:
@@ -49,13 +50,20 @@ class RobotConnection:
           4) Bağlantı doğrula (is_connected)
         """
         # Önce port erişilebilir mi kontrol et
+        #
+        # DÜZELTİLEN HATA: burada tanımsız bir `verbose` adı okunuyordu —
+        # o isim yalnızca modül seviyesindeki connect_robot() fonksiyonunun
+        # parametresiydi. Robot portu kapalı olduğu her seferde NameError
+        # fırlıyor, hiçbir yerde yakalanmadığı için RobotMonitor thread'i
+        # ölüyor ve sipariş "name 'verbose' is not defined" ile düşüyordu.
+        # Bayrak artık örneğin kendi alanı.
         if not _tcp_reachable(self.robot_ip, ROBOT_XMLRPC_PORT, timeout=2.0):
-            if verbose:
+            if self.verbose:
                 print(f"[connect_robot] ⏳ XML-RPC port {ROBOT_XMLRPC_PORT} kapalı — robot henüz hazır değil.")
             return False
 
         if not _tcp_reachable(self.robot_ip, ROBOT_REALTIME_PORT, timeout=2.0):
-            if verbose:
+            if self.verbose:
                 print(f"[connect_robot] ⏳ Realtime port {ROBOT_REALTIME_PORT} kapalı — robot henüz hazır değil.")
             return False
 
@@ -132,12 +140,13 @@ def connect_robot(robot_ip: str, retry: int = 3, wait_s: float = 2.0, verbose: b
     retry: kaç kez deneneceği
     wait_s: denemeler arası bekleme (s)
     """
-    conn = RobotConnection(robot_ip)
+    conn = RobotConnection(robot_ip, verbose=verbose)
     for attempt in range(1, retry + 1):
         ok = conn.connect()
         if ok:
             return conn.rpc, True
         if attempt < retry:
-            print(f"[connect_robot] Deneme {attempt}/{retry} başarısız, {wait_s}s bekleniyor...")
+            if verbose:
+                print(f"[connect_robot] Deneme {attempt}/{retry} başarısız, {wait_s}s bekleniyor...")
             time.sleep(wait_s)
     return None, False

@@ -20,7 +20,8 @@ import { BASE_URL } from "../api/client";
 import { DEBUG, CATEGORIES, ENABLED_CATEGORIES } from "../api/env";
 import DebugOverlay from "../components/DebugOverlay";
 import {
-  beverages, demoIcedDrinks, buildCheckBeverageMessage, getName, findExtra, extraName,
+  beverages, buildCheckBeverageMessage, getName, findExtra, extraName,
+  extraChannel,
 } from "../helper/Beverages";
 import SystemBanner from "../components/SystemBanner";
 import ProductDetail from "../components/modal/ProductDetail";
@@ -135,6 +136,34 @@ const buildCheckMessage = (b) => ({
   a_iBtnNbr: String(b.ButtonNumber),
   a_iBarista: "1", a_iDecaf: "0", a_iSML: "1",
   a_iMilktype: "-1", a_iSirupType: "0", a_iSirupSML: "1",
+});
+
+/**
+ * ROBOT ROTASI — makineye gitmeyen, siparişin tipini belirleyen alanlar.
+ *
+ * Backend bunlara bakarak robotun hangi istasyonlara uğrayacağına karar
+ * verir (SysVar) ve akışı Tip 1–4 arasından seçer:
+ *
+ *   ice       : içeceğin temperature alanından türetilir. Ayrı bir
+ *               kullanıcı adımı yok — "Iced Latte" seçmek buz
+ *               istasyonunu açar.
+ *   ice_water : buz haznesinden su da alınsın mı. Robot bunu kendi
+ *               bilemez; içecek kaydındaki ice_water alanından gelir.
+ *               Yalnızca ice true iken anlamlıdır.
+ *   syrups    : sepetteki ilavelerden yalnızca ŞURUP olanların kanal
+ *               numaraları. Soslar/süsler (dondurma ilaveleri) kanal
+ *               taşımaz, elenirler.
+ *
+ * Kaç mL akacağı BURADA belirlenmez: backend her kanalın kendi dose_ml
+ * değerini okur. Böylece personel dozu /stock sayfasından değiştirince
+ * arayüzde hiçbir şey güncellenmesi gerekmez.
+ */
+const buildRoute = (b) => ({
+  ice: (b.temperature ?? "hot") === "iced",
+  ice_water: Boolean(b.ice_water),
+  syrups: (b.customize ?? [])
+    .map((id) => extraChannel(id))
+    .filter((ch) => ch != null),
 });
 
 const parsePrice = (s) => parseFloat(String(s ?? "0").replace(",", ".")) || 0;
@@ -370,13 +399,23 @@ const Home = () => {
     });
 
   const orderOne = async (beverage) => {
-    // 1) Makine bu içeceği hazırlayabilir mi?
+    // Rota bilgisi hem kontrolde hem siparişte AYNI olmalı — yoksa
+    // kontrol şurupsuz geçer, sipariş şuruplu başlar ve stok kapısı
+    // devreye girmemiş olur.
+    const route = buildRoute(beverage);
+
+    // 1) Makine bu içeceği hazırlayabilir mi? (+ şurup stok kapısı)
     const { data: check } = await api.post(ENDPOINTS.checkBeverage, {
       message: buildCheckMessage(beverage),
+      ...route,
     });
 
     const result = check?.result;
     if (!result || result.returnvalue !== 0) {
+      // Şurup kapısı kendi açıklamasını taşır ("Karamel şurubu yetersiz…");
+      // ham returnvalue metninden ("Başlatma başarısız") çok daha anlaşılır.
+      if (check?.syrup_block?.message) throw check.syrup_block.message;
+
       const detail = check?.machine_error_detail;
       throw detail
         ? `${buildCheckBeverageMessage(result)}\n${detail}`
@@ -387,7 +426,10 @@ const Home = () => {
     let response;
     for (let attempt = 0; attempt <= 3; attempt += 1) {
       try {
-        response = await api.post(ENDPOINTS.orderStandart, { message: buildStartMessage(beverage) });
+        response = await api.post(ENDPOINTS.orderStandart, {
+          message: buildStartMessage(beverage),
+          ...route,
+        });
         break;
       } catch (err) {
         if (err?.response?.status === 409 && attempt < 3) {
@@ -544,15 +586,13 @@ const Home = () => {
      LİSTELER
      ───────────────────────────────────────── */
 
-  // Soğuk içecek demo kayıtları yalnızca SİPARİŞ SERVİSİ sahteyken
-  // menüye eklenir. Buton numaraları (901–903) makinede karşılığı
-  // olmayan aralıktan seçildi; gerçek backend'e gönderilirlerse
-  // makine "tarif numarası mevcut değil" döner. Bu yüzden karma
-  // çalışmada bile sipariş gerçekse listede görünmezler.
-  const coffeeDrinks = [
-    ...(beverages?.drinks ?? []).filter((d) => d.type === "coffee"),
-    ...(OFFLINE_SERVICES.order ? demoIcedDrinks : []),
-  ];
+  // Sıcak ve soğuk içeceklerin hepsi tek listede. Soğuk içecekler
+  // eskiden ayrı bir demoIcedDrinks dizisindeydi ve YALNIZCA çevrimdışı
+  // modda menüye ekleniyordu — çünkü o zaman buton numaraları
+  // uydurmaydı (901–903). Artık gerçek numaralar kullanılıyor
+  // (Iced Americano = 1, Iced Latte = 7) ve backend catalog.py ile
+  // doğrulandı, dolayısıyla ayrı tutmanın anlamı kalmadı.
+  const coffeeDrinks = (beverages?.drinks ?? []).filter((d) => d.type === "coffee");
 
   // Kahve grubunda sıcak/soğuk sekmesi. temperature alanı tanımsız
   // olan eski kayıtlar "hot" sayılır.

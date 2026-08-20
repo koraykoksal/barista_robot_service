@@ -69,8 +69,8 @@ const BREW_SECONDS = {
   5: 20,   // Ristretto
   12: 28,  // Cappuccino
   14: 41,  // Sütlü Çikolata
-  // Çevrimdışı demo soğuk içecekler
-  901: 30, 902: 34, 903: 12,
+  // Çevrimdışı demo soğuk içecekler 
+  7: 34,
 };
 
 /* ═════════════════════════════════════════════
@@ -119,18 +119,45 @@ const stock = (() => {
 const thresholds = { coffee_g: 50, milk_ml: 350, choc_g: 50, cups: 2 };
 
 // Şurup kanalları — senaryoya göre biri düşük olabilir
+// dose_ml: bir siparişte bu kanaldan akıtılacak miktar. Backend'de
+// syrup_stock tablosunda tutulur; sipariş mesajı miktar taşımaz.
 const syrupChannels = (() => {
   const base = {
-    1: { channel: 1, name: "Vanilya",        ml: 1000, threshold: 50, low: false },
-    2: { channel: 2, name: "Karamel",        ml: 1000, threshold: 50, low: false },
-    3: { channel: 3, name: "Çikolata",       ml: 1000, threshold: 50, low: false },
-    4: { channel: 4, name: "Beyaz Çikolata", ml: 1000, threshold: 50, low: false },
+    1: { channel: 1, name: "Vanilya",        ml: 1000, threshold: 50, dose_ml: 18, low: false },
+    2: { channel: 2, name: "Karamel",        ml: 1000, threshold: 50, dose_ml: 18, low: false },
+    3: { channel: 3, name: "Çikolata",       ml: 1000, threshold: 50, dose_ml: 18, low: false },
+    4: { channel: 4, name: "Beyaz Çikolata", ml: 1000, threshold: 50, dose_ml: 18, low: false },
+    5: { channel: 5, name: "Fındık",         ml: 1000, threshold: 50, dose_ml: 18, low: false },
+    6: { channel: 6, name: "Çilek",          ml: 1000, threshold: 50, dose_ml: 18, low: false },
   };
   if (s === "low-stock") {
     base[2].ml = 20; base[2].low = true;   // Karamel düşük
   }
   return base;
 })();
+
+/**
+ * Şurup stok kapısı — backend'deki resolve_syrup_selection'ın karşılığı.
+ * Seçilen kanallardan biri eşiğin altındaysa sipariş engellenir.
+ */
+function syrupGate(channels) {
+  for (const raw of channels ?? []) {
+    const ch = syrupChannels[Number(raw)];
+    if (!ch) {
+      return { channel: raw, reason: "channel_missing",
+               message: `Kanal ${raw} tanımlı değil.` };
+    }
+    if (ch.ml < ch.threshold || ch.ml < ch.dose_ml) {
+      return {
+        channel: ch.channel, name: ch.name,
+        reason: ch.ml < ch.threshold ? "below_threshold" : "insufficient",
+        remaining_ml: ch.ml, need_ml: ch.dose_ml,
+        message: `${ch.name} şurubu yetersiz — bu içecek geçici olarak verilemiyor.`,
+      };
+    }
+  }
+  return null;
+}
 
 function stockStatus() {
   const coffeeCrit = stock.coffee_g < thresholds.coffee_g;
@@ -181,13 +208,25 @@ function stockStatus() {
 
 const jobs = new Map();
 
-function startJob(buttonNumber) {
+function startJob(body) {
+  const buttonNumber = body?.message?.a_iBtnNbr;
+  const useIce  = Boolean(body?.ice);
+  const syrups  = Array.isArray(body?.syrups) ? body.syrups : [];
   const jobId = `offline-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const brew = BREW_SECONDS[Number(buttonNumber)] ?? 25;
 
+  // Zaman çizelgesi sipariş TİPİNE göre kurulur — backend'in ürettiği
+  // fazların aynısı. Buzsuz siparişte buz fazı hiç görünmez.
   const timeline = [
     { phase: "created",              ms: 300 },
+    ...(useIce || syrups.length ? [{ phase: "set_sysvars", ms: 250 }] : []),
     { phase: "set_do0_true",         ms: 700 },
+    ...(useIce ? [{ phase: "wait_di9_ice", ms: 4200 }] : []),
+    ...(syrups.length ? [
+      { phase: "wait_di8_syrup", ms: 3000 },
+      { phase: "syrup_dispense", ms: 1400 * syrups.length },
+      { phase: "set_do7_true",   ms: 500 },
+    ] : []),
     { phase: "wait_di1_robot_ready", ms: 3200 },
     { phase: "coffee_task_start",    ms: 900 },
     { phase: `timer_${brew}s`,       ms: brew * 1000 },
@@ -231,6 +270,14 @@ function startJob(buttonNumber) {
     stock.coffee_g = Math.max(0, stock.coffee_g - 9);
     if ([3, 12, 14, 901, 902].includes(btn)) stock.milk_ml = Math.max(0, stock.milk_ml - 150);
     if (btn === 14) stock.choc_g = Math.max(0, stock.choc_g - 20);
+
+    // Akıtılan şurup da kanaldan düşer
+    for (const raw of syrups) {
+      const ch = syrupChannels[Number(raw)];
+      if (!ch) continue;
+      ch.ml = Math.max(0, ch.ml - ch.dose_ml);
+      ch.low = ch.ml < ch.threshold;
+    }
   })();
 
   return jobId;
@@ -260,6 +307,7 @@ function route(config) {
     if (syrupChannels[ch]) {
       if (body.ml != null) { syrupChannels[ch].ml = Number(body.ml); syrupChannels[ch].low = syrupChannels[ch].ml < syrupChannels[ch].threshold; }
       if (body.threshold != null) syrupChannels[ch].threshold = Number(body.threshold);
+      if (body.dose_ml != null) syrupChannels[ch].dose_ml = Number(body.dose_ml);
       if (body.name != null) syrupChannels[ch].name = body.name;
     }
     return ok(syrupChannels[ch] ?? {}, config);
@@ -267,17 +315,29 @@ function route(config) {
 
   if (url === "/check_beverage") {
     const m = machineState();
+    // Şurup kapısı makineden ÖNCE uygulanır — backend de böyle yapıyor.
+    const blocked = syrupGate(body.syrups);
+    if (blocked) {
+      return ok({
+        ws_uri: "ws://offline/",
+        sent: body.message,
+        result: { returnvalue: 5, status: "syrup_unavailable" },
+        machine_error_detail: null,
+        syrup_block: blocked,
+      }, config);
+    }
     const returnvalue = !m.online ? 1 : m.has_blocking_error ? 4 : 0;
     return ok({
       ws_uri: "ws://offline/",
       sent: body.message,
       result: { returnvalue, status: returnvalue === 0 ? "ready" : "not ready" },
       machine_error_detail: returnvalue === 4 ? m.error_description : null,
+      syrup_block: null,
     }, config);
   }
 
   if (url === "/order_standart" && method === "post") {
-    return ok({ job_id: startJob(body.message?.a_iBtnNbr) }, config);
+    return ok({ job_id: startJob(body) }, config);
   }
 
   if (url.startsWith("/order/status/")) {

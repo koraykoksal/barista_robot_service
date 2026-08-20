@@ -8,7 +8,7 @@ bağlantıya veya global duruma dokunmaz; yalnızca verilen veriyi yorumlar.
 Bu sayede test edilebilir ve core katmanında kalabilir.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from core.config import MACHINE_ERROR_MESSAGES
 
@@ -46,6 +46,40 @@ def describe_machine_errors(error_codes: List[Any]) -> str:
     # Aynı mesaj birden fazla koddan gelebiliyor (ör. 75 ve 76 posa çekmecesi)
     unique = list(dict.fromkeys(parts))
     return " | ".join(unique)
+
+
+def describe_with_texts(error_codes: List[Any],
+                       error_texts: Optional[Dict[Any, str]] = None) -> str:
+    """
+    Hata kodlarını açıklamaya çevirir; makinenin KENDİ metnini önceler.
+
+    MACHINE_ERROR_MESSAGES elle tutulan bir tablodur ve sahada
+    karşılaşılan her kodu içermez (ör. 672, 687, 747). Makine bu kodlarla
+    birlikte "Error Text" alanında kendi açıklamasını da gönderiyor;
+    varsa onu kullanmak "Makine hatası (kod: 747)" demekten iyidir.
+
+    Sıralama: makine metni → yerel tablo → "kod: N".
+    """
+    if not error_codes:
+        return "Bilinmeyen makine hatası"
+
+    texts = error_texts or {}
+    parts = []
+    for code in error_codes:
+        try:
+            key = int(code)
+        except (TypeError, ValueError):
+            key = code
+
+        machine_text = str(texts.get(key) or texts.get(str(key)) or "").strip()
+        if machine_text:
+            # Makine bazen metnin başına kod numarası ve satır sonu
+            # koyuyor; ekranda tek satır dursun diye boşluklar sadeleştirilir.
+            parts.append(" ".join(machine_text.split()))
+        else:
+            parts.append(MACHINE_ERROR_MESSAGES.get(key, f"Makine hatası (kod: {code})"))
+
+    return " | ".join(dict.fromkeys(parts))
 
 
 # ─────────────────────────────────────────────

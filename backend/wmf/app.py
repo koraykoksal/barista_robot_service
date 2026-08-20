@@ -36,7 +36,7 @@ from route import machine as machine_route
 from route import order as order_route
 from route import stock as stock_route
 from route import syrup as syrup_route
-from service.registry import monitor, robot_mgr, syrup
+from service.registry import coffee, monitor, robot_mgr, syrup
 from service.sync_service import bootstrap as sync_bootstrap
 from service.sync_service import sync
 
@@ -153,17 +153,72 @@ async def lifespan(app: FastAPI):
 
 async def _check_monitor() -> bool:
     """
+    Kahve makinesine bağlanır ve açılışta durumunu raporlar.
+
     order_service sipariş öncesi monitor.get_state() çağırıyor;
     başlatılmazsa durum sözlüğü boş kalır ve her sipariş
     "makine çevrimdışı" diye reddedilebilir.
+
+    Syrup kontrolüyle aynı biçimde özet basar. Önceden yalnızca
+    "MachineMonitor başlatıldı" yazıyordu; bağlantının kurulup
+    kurulmadığı, hangi adrese gidildiği ve makinede aktif hata olup
+    olmadığı log akışında kayboluyordu.
+
+    Bağlantı arka planda kurulduğu için kısa bir süre beklenir; süre
+    dolarsa açılış yine de devam eder (monitor denemeyi sürdürür).
     """
+    from core.machine_errors import describe_machine_errors
+
+    log.info("─" * 58)
+    log.info("☕ Kahve makinesi kontrol ediliyor → %s", monitor.ws_uri)
+
     try:
         await monitor.start()
-        log.info("MachineMonitor başlatıldı.")
-        return True
     except Exception as e:
-        log.warning("MachineMonitor başlatılamadı: %s", e)
+        log.warning("☕ MachineMonitor başlatılamadı: %s", e)
+        log.info("─" * 58)
         return False
+
+    # Bağlantı _run() içinde kuruluyor — durumun oturması için bekle.
+    deadline = asyncio.get_running_loop().time() + 6.0
+    state = await monitor.get_state()
+    while not state.get("online") and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.25)
+        state = await monitor.get_state()
+
+    if not state.get("online"):
+        log.warning("☕ Makineye 6 sn içinde bağlanılamadı (%s). "
+                    "Arka planda denemeye devam edilecek; /machine/status bildirir.",
+                    monitor.ws_uri)
+        log.info("─" * 58)
+        return False
+
+    log.info("☕ Makine BAĞLI (%s).", monitor.ws_uri)
+
+    # Sipariş akışı checkBeverage/startBeverage için AYRI bir bağlantı
+    # açar. Adresler ayrışırsa durum ekranı çalışır görünürken siparişler
+    # başka makineye gider — bu yüzden açılışta karşılaştırılır.
+    if coffee.ws_uri != monitor.ws_uri:
+        log.warning("☕ ⚠️  Sipariş adresi ile izleme adresi FARKLI: "
+                    "sipariş=%s izleme=%s", coffee.ws_uri, monitor.ws_uri)
+    if not coffee.ws_token:
+        log.warning("☕ COFFEE_MACHINE_TOKEN boş — makine isteği reddedebilir.")
+
+    blocking = state.get("blocking_errors") or []
+    errors   = state.get("errors") or []
+
+    if blocking:
+        log.warning("☕ Makinede ENGELLEYİCİ hata var → %s | %s",
+                    blocking, describe_machine_errors(blocking))
+        log.warning("☕ Bu hata giderilene kadar sipariş ekranı bloke kalır.")
+    elif errors:
+        log.info("☕ Makinede engelleyici olmayan hata(lar): %s", errors)
+    else:
+        log.info("☕ Makinede aktif hata yok.")
+
+    log.info("☕ Kontrol tamam ✅")
+    log.info("─" * 58)
+    return True
 
 
 async def _check_syrup() -> bool:

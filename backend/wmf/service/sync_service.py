@@ -172,7 +172,8 @@ class SyncService:
                 ch = syrup["channel"]
                 await col_syrup_stock().update_one(
                     {"_id": ch},
-                    {"$set": {k: syrup[k] for k in ("name", "ml", "threshold", "capacity")
+                    {"$set": {k: syrup[k] for k in ("name", "ml", "threshold",
+                                                    "capacity", "dose_ml")
                               if k in syrup}},
                     upsert=True,
                 )

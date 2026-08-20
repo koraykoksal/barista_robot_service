@@ -77,11 +77,22 @@ RCP_STATE_LABELS: Dict[int, str] = {
 
 
 class CoffeeService:
+    """
+    Kahve makinesi WebSocket istemcisi.
 
-    def __init__(self):
-        self.ws_ip    = "192.168.1.111"
-        self.ws_port  = 25000
-        self.ws_token = "0123456789abcdef0123456789abcdef"
+    DÜZELTİLEN HATA: IP, port ve token burada SABİT YAZILIYDI ve
+    registry.py bu sınıfı argümansız kuruyordu. Sonuç: .env içindeki
+    COFFEE_MACHINE_IP yalnızca MachineMonitor ve MachineInfoService'i
+    etkiliyor, siparişin kendisi (checkBeverage / startBeverage) hep
+    gömülü adrese gidiyordu. Makine IP'si değiştiğinde durum ekranı
+    çalışır görünürken siparişler sessizce eski adrese düşerdi.
+    Değerler artık dışarıdan verilir (bkz. service/registry.py).
+    """
+
+    def __init__(self, ip: str, port: int = 25000, token: str = ""):
+        self.ws_ip    = ip
+        self.ws_port  = int(port)
+        self.ws_token = token
         self.ws_uri   = f"ws://{self.ws_ip}:{self.ws_port}/"
 
     def _auth_headers(self) -> Dict[str, str]:

@@ -35,11 +35,18 @@ import { palette } from "../../theme";
    FAZ TANIMLARI
    ───────────────────────────────────────────── */
 
+// Sipariş tipine göre bazı fazlar hiç gelmez (buzsuz siparişte
+// wait_di9_ice yoktur). Dolum o fazları atlar; sıçrama beklenen
+// davranıştır, eksik faz değil.
 const PHASES = {
-  created:              { pct: 5,   tr: "Sipariş alındı",              en: "Order received" },
-  set_do0_true:         { pct: 12,  tr: "Bardak hazırlanıyor",         en: "Preparing the cup" },
-  wait_di1_robot_ready: { pct: 25,  tr: "Robot bardağı yerleştiriyor", en: "Robot is placing the cup" },
-  syrup_dispense:       { pct: 36,  tr: "Şurup ekleniyor",             en: "Adding syrup" },
+  created:              { pct: 4,   tr: "Sipariş alındı",              en: "Order received" },
+  set_sysvars:          { pct: 6,   tr: "Hazırlık",                    en: "Getting ready" },
+  set_do0_true:         { pct: 10,  tr: "Bardak hazırlanıyor",         en: "Preparing the cup" },
+  wait_di9_ice:         { pct: 18,  tr: "Buz ekleniyor",               en: "Adding ice" },
+  wait_di8_syrup:       { pct: 26,  tr: "Şurup istasyonuna gidiliyor", en: "Heading to the syrup station" },
+  syrup_dispense:       { pct: 32,  tr: "Şurup ekleniyor",             en: "Adding syrup" },
+  set_do7_true:         { pct: 38,  tr: "Kahve makinesine taşınıyor",  en: "Moving to the machine" },
+  wait_di1_robot_ready: { pct: 42,  tr: "Robot bardağı yerleştiriyor", en: "Robot is placing the cup" },
   coffee_task_start:    { pct: 45,  tr: "Demleme başlıyor",            en: "Brewing starts" },
   // timer_* fazı 45 → 82 aralığında yumuşak ilerler
   set_do2_true:         { pct: 85,  tr: "İçecek hazır",                en: "Drink is ready" },

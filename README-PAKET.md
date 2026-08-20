@@ -1157,6 +1157,107 @@ değil. Aşama 5'te yönetici paneliyle ele alınacak.
 
 ---
 
+## Sipariş tipleri: buz ve şurup istasyonları
+
+Akış artık iki bayrağa göre dallanıyor: `ice` ve `syrups`. İkisi de
+arayüzden gelir, kahve makinesine gitmez — yalnızca **robotun rotasını**
+belirler.
+
+| Tip | Buz | Şurup | Uğranan istasyonlar |
+|---|---|---|---|
+| 1 | — | — | doğrudan kahve makinesi |
+| 2 | — | ✓ | şurup → kahve makinesi |
+| 3 | ✓ | — | buz → kahve makinesi |
+| 4 | ✓ | ✓ | buz → şurup → kahve makinesi |
+
+### Sinyaller
+
+| Sinyal | Uygulama | Robot |
+|---|---|---|
+| `SysVar1` | yazar (1) | okur → şurup istasyonuna uğrar |
+| `SysVar2` | yazar (1) | okur → buz istasyonuna uğrar |
+| `SysVar3` | yazar (0/1) | okur → **0: yalnızca buz · 1: buz + su** |
+| `DO0` | yazar (1) | okur → bardağı alır |
+| `DI9` | okur/bekler | yazar (1) → buz alındı |
+| `DI8` | okur/bekler | yazar (1) → şurup istasyonunda |
+| `DO7` | yazar (1) | okur → kahve makinesine yerleştirir |
+| `DI1` | okur/bekler | yazar (1) → yerleştirildi |
+| `DO2` | yazar (1) | okur → teslim eder |
+| `DI3` | okur/bekler | yazar (1) → teslim edildi |
+
+**SysVar'lar DO0'dan ÖNCE yazılır, ardından 0,5 sn beklenir**
+(`ROBOT_SYSVAR_SETTLE`). Robot bardağı almadan önce rotanın tamamını
+bilmelidir; SysVar ve DO ayrı XML-RPC çağrılarıyla gittiği için DO0'ı
+erken gören robot SysVar'ın eski değerini okuyup yanlış istasyona
+gidebilir.
+
+`SysVar3` yalnızca `SysVar2 = 1` iken anlamlıdır: robot buz haznesinden
+buz mu, buz + su mu alacağını kendi bilemez. Değer içecek kaydındaki
+`ice_water` alanından gelir (`Beverages.js` / `catalog.py`); alan yoksa
+yalnızca buz alınır.
+
+**SysVar id aralığı SDK'da [1~20], 0 geçersizdir** (`sdk/Robot.py` →
+`SetSysVarValue`). Robot programındaki "SysVar0/SysVar1" adlandırması
+`.env` içinde 1 ve 2'ye eşlenir; robot tarafındaki değişken indeksi
+bununla aynı olmalıdır. Pin ve SysVar numaralarının hepsi `.env`'den
+ayarlanır, kodda gömülü değildir.
+
+### Şurup miktarı
+
+Sipariş mesajı mL taşımaz. Müşteri yalnızca **hangi şurubu** seçer;
+kaç mL akacağı `syrup_stock` tablosundaki kanal başına `dose_ml`
+değeridir ve `/stock` sayfasının "Yenileme & Eşikler" sekmesinden
+düzenlenir. Doz değişince arayüzde hiçbir şey güncellenmesi gerekmez.
+
+Standart doz **18 mL** (`SYRUP_DEFAULT_DOSE_ML`). ⚠️ Bu ayar yalnızca
+kanal **ilk oluşturulurken** uygulanır; doz veritabanında kanal başına
+tutulduğu için `.env`'i sonradan değiştirmek mevcut kanalları
+güncellemez — onları `/stock` sayfasındaki "Doz (ml)" alanından
+değiştirin.
+
+Birden fazla şurup seçilebilir: bardak şurup istasyonunda beklerken
+kanallar **sırayla** akıtılır. Aynı kanal iki kez seçilirse bir kez
+akıtılır. Bir kanal başarısız olursa akış durur — eksik reçeteli içecek
+müşteriye verilmez.
+
+### Stok kapısı robot hareket etmeden önce
+
+Şurup planı ADIM 0.7'de, yani **robot bardağı almadan önce** çözülür.
+Kanal eşiğin altındaysa bardak boşuna alınmaz. Aynı kontrol
+`/check_beverage` ucunda da uygulanır; arayüz `syrup_block.message`
+alanını doğrudan gösterir ("Karamel şurubu yetersiz…").
+
+### Buz kararı
+
+İçeceğin `temperature` alanından türetilir — ayrı bir kullanıcı adımı
+yok. `temperature: "iced"` yazan kayıt buz istasyonunu açar,
+`ice_water: true` ise su da alınır. İstek gövdesinde açık `ice` /
+`ice_water` bayrağı gelirse o önceliklidir (katalogda olmayan içecekler
+için).
+
+Buz makinesini robot kendi rölesiyle tetikler; uygulama yalnızca DI9
+onayını bekler — buz işlemine karışmaz.
+
+### Doğrulama
+
+Sahte robotla beş senaryonun sinyal sırası uçtan uca test edildi:
+
+```
+Tip 1  DO0 → DI1 → startBeverage → DO2 → DI3                                    ✅
+Tip 2  SysVar1 → DO0 → DI8 → dispense → DO7 → DI1 → … → DI3                     ✅
+Tip 3  SysVar2 → SysVar3=0 → DO0 → DI9 → DI1 → … → DI3        (yalnızca buz)    ✅
+Tip 3  SysVar2 → SysVar3=1 → DO0 → DI9 → DI1 → … → DI3        (buz + su)        ✅
+Tip 4  SysVar2 → SysVar3=1 → SysVar1 → DO0 → DI9 → DI8 → dispense×2 → DO7 → …   ✅
+
+SysVar → DO0 gecikmesi ölçüldü: 500–515 ms                                      ✅
+Akış başında ve sonunda 6 sinyalin tamamı sıfırlandı                            ✅
+Kapı: kanal tanımsız / doz girilmemiş / eşik altı → sipariş başlamadı           ✅
+Mükerrer kanal ayıklandı, sıra korundu                                          ✅
+SQLite geçişi: mevcut kiosk.db'ye dose_ml sütunu 18 mL ile eklendi              ✅
+```
+
+---
+
 ## Sırada
 
 | Aşama | İçerik |

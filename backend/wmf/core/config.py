@@ -69,6 +69,58 @@ ROBOT_STATUS_POLL_INTERVAL = _float("ROBOT_STATUS_POLL_INTERVAL", 2.0)
 
 
 # ─────────────────────────────────────────────
+# ROBOT IO HARİTASI
+# ─────────────────────────────────────────────
+#
+# Pin numaraları koda gömülmez: saha kablolaması değiştiğinde .env
+# düzenlemek yeterli olsun. Sipariş akışı bu isimleri kullanır,
+# çıplak sayıları değil.
+#
+#   UYGULAMA YAZAR (DO)              ROBOT YAZAR (DI)
+#   ───────────────────              ────────────────
+#   DO0  bardağı al                  DI9  buz alındı
+#   DO7  kahve makinesine yerleştir  DI8  şurup istasyonunda
+#   DO2  teslim et                   DI1  makineye yerleştirildi
+#                                    DI3  teslim edildi
+#
+# SysVar (sistem değişkeni) robota siparişin TİPİNİ önceden bildirir:
+# robot DO0'ı görüp bardağı aldığında hangi istasyonlara uğrayacağını
+# bu değişkenlerden okur.
+ROBOT_DO_TAKE_CUP  = _int("ROBOT_DO_TAKE_CUP",  0)   # → bardağı al, başla
+ROBOT_DO_PLACE_CUP = _int("ROBOT_DO_PLACE_CUP", 7)   # → şurup bitti, makineye yerleştir
+ROBOT_DO_DELIVER   = _int("ROBOT_DO_DELIVER",   2)   # → içecek hazır, teslim et
+
+ROBOT_DI_CUP_PLACED = _int("ROBOT_DI_CUP_PLACED", 1)  # ← makineye yerleştirdim
+ROBOT_DI_DELIVERED  = _int("ROBOT_DI_DELIVERED",  3)  # ← teslim ettim
+ROBOT_DI_AT_SYRUP   = _int("ROBOT_DI_AT_SYRUP",   8)  # ← şurup istasyonundayım
+ROBOT_DI_ICE_TAKEN  = _int("ROBOT_DI_ICE_TAKEN",  9)  # ← buzu aldım
+
+# SysVar id aralığı SDK'da [1~20]; 0 GEÇERSİZDİR (sdk/Robot.py → SetSysVarValue).
+# Robot programındaki "SysVar0/SysVar1" adlandırması burada 1 ve 2'ye eşlenir.
+ROBOT_SYSVAR_SYRUP    = _int("ROBOT_SYSVAR_SYRUP",    1)   # 1 → şurup istasyonuna uğra
+ROBOT_SYSVAR_ICE      = _int("ROBOT_SYSVAR_ICE",      2)   # 1 → buz istasyonuna uğra
+ROBOT_SYSVAR_ICE_TYPE = _int("ROBOT_SYSVAR_ICE_TYPE", 3)   # 0 → buz, 1 → buz + su
+
+# Buz istasyonunda ne alınacağı (SysVar3 değeri)
+ICE_TYPE_ICE       = 0   # yalnızca buz
+ICE_TYPE_ICE_WATER = 1   # buz + su
+
+# SysVar yazımı ile DO yazımı arasındaki bekleme (saniye).
+#
+# NEDEN: SysVar XML-RPC üzerinden, DO ise ayrı bir çağrıyla gider.
+# Robot DO0'ı görüp harekete başladığında SysVar değerinin denetleyicide
+# çoktan oturmuş olması gerekir; aksi halde robot eski (veya sıfır)
+# değeri okuyup yanlış istasyona gider.
+ROBOT_SYSVAR_SETTLE = _float("ROBOT_SYSVAR_SETTLE", 0.5)
+
+# Buz istasyonu robotun kendi rölesiyle tetiklenir; uygulama yalnızca
+# DI ile "buz alındı" onayını bekler. Bu süre robotun buz alma
+# hareketini kapsamalı.
+ICE_WAIT_TIMEOUT   = _float("ICE_WAIT_TIMEOUT",   90.0)
+SYRUP_WAIT_TIMEOUT = _float("SYRUP_WAIT_TIMEOUT", 90.0)
+
+
+# ─────────────────────────────────────────────
 # KAHVE MAKİNESİ (WMF CM-Remote)
 # ─────────────────────────────────────────────
 COFFEE_MACHINE_IP    = _str("COFFEE_MACHINE_IP", "192.168.1.111")
@@ -83,6 +135,15 @@ SYRUP_HOST     = _str("SYRUP_HOST", "192.168.1.155")
 SYRUP_PORT     = _int("SYRUP_PORT", 5000)
 SYRUP_TIMEOUT  = _float("SYRUP_TIMEOUT", 15.0)
 SYRUP_CHANNELS = _int("SYRUP_CHANNELS", 8)
+
+# Kanal başına akıtılacak varsayılan doz. Kanalın kendi dose_ml değeri
+# (syrup_stock tablosu, /stock sayfasından düzenlenir) doluysa o kullanılır;
+# bu değer yalnızca yeni kanal oluşturulurken başlangıç noktasıdır.
+#
+# ⚠️  Bu değeri sonradan değiştirmek MEVCUT kanalları güncellemez —
+# doz veritabanında kanal başına tutulur. Zaten oluşmuş kanalların
+# dozunu /stock sayfasındaki "Doz (ml)" alanından değiştirin.
+SYRUP_DEFAULT_DOSE_ML = _float("SYRUP_DEFAULT_DOSE_ML", 18.0)
 
 
 # ─────────────────────────────────────────────
@@ -218,6 +279,35 @@ def validate() -> None:
 
     if LOG_LEVEL.upper() not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
         warnings.append(f"LOG_LEVEL={LOG_LEVEL} tanınmıyor — INFO kullanılacak.")
+
+    # SysVar id'si SDK'da [1~20]. 0 veya 21+ verilirse SetSysVarValue hata
+    # döner ve şuruplu/buzlu siparişler daha ilk adımda düşer.
+    _sysvars = {
+        "ROBOT_SYSVAR_SYRUP":    ROBOT_SYSVAR_SYRUP,
+        "ROBOT_SYSVAR_ICE":      ROBOT_SYSVAR_ICE,
+        "ROBOT_SYSVAR_ICE_TYPE": ROBOT_SYSVAR_ICE_TYPE,
+    }
+    for label, value in _sysvars.items():
+        if not 1 <= value <= 20:
+            warnings.append(
+                f"{label}={value} — SDK sistem değişkeni aralığı [1~20]. "
+                "Bu değerle bayrak yazılamaz."
+            )
+
+    if len(set(_sysvars.values())) != len(_sysvars):
+        warnings.append(
+            f"SysVar numaraları çakışıyor: {_sysvars} — "
+            "robot bayrakları birbirinden ayırt edemez."
+        )
+
+    _do_pins = [ROBOT_DO_TAKE_CUP, ROBOT_DO_PLACE_CUP, ROBOT_DO_DELIVER]
+    if len(set(_do_pins)) != len(_do_pins):
+        warnings.append(f"Robot DO pinleri çakışıyor: {_do_pins}")
+
+    _di_pins = [ROBOT_DI_CUP_PLACED, ROBOT_DI_DELIVERED,
+                ROBOT_DI_AT_SYRUP, ROBOT_DI_ICE_TAKEN]
+    if len(set(_di_pins)) != len(_di_pins):
+        warnings.append(f"Robot DI pinleri çakışıyor: {_di_pins}")
 
     if warnings:
         print("=" * 60)
