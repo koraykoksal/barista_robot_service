@@ -100,9 +100,12 @@ services:
       # bunu çalışma anında değil derlemede gömer. Alternatif:
       # frontend/public/config.js ile derlemesiz değiştirme.
       args:
-        VITE_API_URL: ${KIOSK_API_URL:?KIOSK_API_URL tanimlanmali - ornek http://192.168.1.44:8000}
-        VITE_ADMIN_TOKEN: ${KIOSK_ADMIN_TOKEN:-}
-        VITE_ADMIN_PASSWORD: ${KIOSK_ADMIN_PASSWORD:-wmf2024}
+        # ${DEGISKEN:-varsayilan}  →  .env varsa onu, yoksa buradaki değeri kullanır.
+        # ⚠️  ${DEGISKEN:varsayilan} DİYE BİR BİÇİM YOKTUR — compose
+        #     "invalid interpolation format" verip hiç açılmaz. Tire şart.
+        VITE_API_URL:        ${KIOSK_API_URL:-http://192.168.1.44:8000}
+        VITE_ADMIN_TOKEN:    ${KIOSK_ADMIN_TOKEN:-abcdefg1234567890abcdefg1234567890}
+        VITE_ADMIN_PASSWORD: ${KIOSK_ADMIN_PASSWORD:-wmf2026}
     image: barista-frontend:latest
     container_name: barista-frontend
     restart: unless-stopped
