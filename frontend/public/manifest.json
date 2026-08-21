@@ -1,0 +1,8 @@
+{
+    "name":"Barista Kiosk",
+    "short_name":"Barista",
+    "start_url":"/",
+    "display":"fullscreen",
+    "orientation":"portrait",
+    "background_color":"#000000"
+}

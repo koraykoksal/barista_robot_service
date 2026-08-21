@@ -74,10 +74,25 @@ class SyncService:
         if self._task and not self._task.done():
             # Kapanmadan önce son bir tur dene — kuyrukta bekleyen varsa
             # servis kapanırken aktarılsın.
+            #
+            # Kuyruk BOŞSA hiç denenmez: drain_once() bu durumda da
+            # MongoDB'ye ping atıyordu ve bulut erişilemezken her kapanışa
+            # ~4 sn ekliyordu. Uzun kapanış, Ctrl+C ile öldürülme riskini
+            # artırıyor; öldürülen kapanışta aktif sipariş iptal edilmiyor
+            # ve robot DO sinyalleri asılı kalıyor.
+            pending = 0
             try:
-                await asyncio.wait_for(self.drain_once(), timeout=8.0)
-            except Exception as e:
-                log.warning("Kapanış senkronizasyonu tamamlanamadı: %s", e)
+                pending = await asyncio.to_thread(sqlite_store.outbox_count)
+            except Exception:
+                pending = 1        # okunamadıysa denemek daha güvenli
+
+            if pending:
+                try:
+                    await asyncio.wait_for(self.drain_once(), timeout=8.0)
+                except Exception as e:
+                    log.warning("Kapanış senkronizasyonu tamamlanamadı: %s", e)
+            else:
+                log.info("Kuyruk boş — kapanışta senkronizasyon denenmedi.")
             self._task.cancel()
             try:
                 await self._task

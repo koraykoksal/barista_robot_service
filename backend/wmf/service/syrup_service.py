@@ -79,6 +79,20 @@ def parse_err_line(line: str) -> Dict[str, Any]:
     return result
 
 
+def _event_channel(line: str):
+    """
+    EVT satirindaki CH= alanini int olarak dondurur; yoksa None.
+    "EVT:DISP:COMPLETE:CH=01" → 1
+    """
+    for token in line.split(":"):
+        if token.startswith("CH="):
+            try:
+                return int(token[3:].lstrip("0") or "0")
+            except ValueError:
+                return None
+    return None
+
+
 def _to_float(value, default=0.0):
     try:
         return float(value)
@@ -451,6 +465,17 @@ class SyrupService:
                                 direction = token[4:]
 
                     elif line.startswith("EVT:DISP:COMPLETE"):
+                        # Olayin BU kanala ait oldugunu dogrula.
+                        # Coklu surup siparislerinde kanallar arka arkaya
+                        # akitiliyor; onceki kanaldan gecikmis bir COMPLETE
+                        # satiri bu dozaji "tamamlandi" sanmamiza yol acardi
+                        # ve surup eksik kalirdi. Kanal bilgisi yoksa
+                        # (eski firmware) eskisi gibi kabul edilir.
+                        evt_ch = _event_channel(line)
+                        if evt_ch is not None and evt_ch != channel:
+                            print(f"[SyrupService] ⚠️  CH{evt_ch} icin COMPLETE geldi, "
+                                  f"CH{channel} bekleniyor — yoksayildi.")
+                            continue
                         complete_raw = line
                         break
 
@@ -459,6 +484,11 @@ class SyrupService:
                         # Kılavuz: COMPLETE ve ABORT'un ikisi de
                         # sonlandırıcıdır; yalnızca COMPLETE beklemek
                         # sonsuz bekleme üretir.
+                        evt_ch = _event_channel(line)
+                        if evt_ch is not None and evt_ch != channel:
+                            print(f"[SyrupService] ⚠️  CH{evt_ch} icin ABORT geldi, "
+                                  f"CH{channel} bekleniyor — yoksayildi.")
+                            continue
                         fields = {}
                         for token in line.split(":"):
                             if "=" in token:

@@ -762,7 +762,7 @@ const Home = () => {
                   component="img"
                   src={cat.type === "coffee" ? coffeeCategoryImg : iceCreamCategoryImg}
                   alt=""
-                  sx={{ width: "100%", height: 190, objectFit: "contain", p: 2 }}
+                  sx={{ width: "100%", height: 190, objectFit: "contain", p: 0 }}
                 />
                 <Typography variant="h2" sx={{ px: 2.5, pb: 3 }}>
                   {cat[`name_${language}`] ?? cat.name}

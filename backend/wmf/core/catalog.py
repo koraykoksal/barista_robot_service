@@ -70,13 +70,13 @@ BEVERAGES: List[Dict[str, Any]] = [
         "button": 3,  "recipe": 91,
         "name_tr": "Latte",      "name_en": "Latte",
         "uses_coffee": True,  "uses_milk": True,  "uses_choc": False,
-        "brew_seconds": 40, "category": "coffee", "temperature": "hot",
+        "brew_seconds": 48, "category": "coffee", "temperature": "hot",
     },
     {
         "button": 5,  "recipe": 3,
         "name_tr": "Ristretto",  "name_en": "Ristretto",
         "uses_coffee": True,  "uses_milk": False, "uses_choc": False,
-        "brew_seconds": 20, "category": "coffee", "temperature": "hot",
+        "brew_seconds": 35, "category": "coffee", "temperature": "hot",
     },
     {
         # Iced Latte — makine sütlü içeceği hazırlar, buzu robot ekler.
@@ -87,7 +87,7 @@ BEVERAGES: List[Dict[str, Any]] = [
         "button": 7,  "recipe": 7,
         "name_tr": "Iced Latte", "name_en": "Iced Latte",
         "uses_coffee": True,  "uses_milk": True,  "uses_choc": False,
-        "brew_seconds": 34, "category": "coffee", "temperature": "iced",
+        "brew_seconds": 48, "category": "coffee", "temperature": "iced",
     },
     {
         "button": 12, "recipe": 88,

@@ -95,6 +95,9 @@ async def lifespan(app: FastAPI):
     # Robotun hazır olup olmadığını /robot/status ucu bildirir.
     robot_mgr.start()
     log.info("RobotManager arka planda başlatıldı (bağlantı hazır olunca /robot/status bildirir).")
+
+    # Çökme/zorla kapanma sonrası güvenlik ağı — açılışı bloke etmez.
+    asyncio.create_task(_reset_robot_signals_when_ready())
     robot_ok = robot_mgr._is_connected_quick() if hasattr(robot_mgr, "_is_connected_quick") else False
 
     log.info("=" * 58)
@@ -219,6 +222,53 @@ async def _check_monitor() -> bool:
     log.info("☕ Kontrol tamam ✅")
     log.info("─" * 58)
     return True
+
+
+async def _reset_robot_signals_when_ready(timeout: float = 60.0) -> None:
+    """
+    Robot bağlanır bağlanmaz çıkış sinyallerini BİR KEZ sıfırlar.
+
+    NEDEN GEREKLİ:
+      Uygulama kapanış işleyicisini çalıştıramadan öldürülebiliyor —
+      Ctrl+C'nin süreci doğrudan sonlandırması, --reload'un işçiyi
+      öldürmesi, güç kesintisi. Log'da bunun izi var: 21 açılışa karşılık
+      yalnızca 12 düzgün kapanış.
+
+      Kapanış çalışmazsa DO sinyalleri robotta ASILI KALIR. Örneğin DO2
+      (teslim et) HIGH kalmışsa robot, uygulama yeniden açıldığında bayat
+      bir komutla karşılaşır ve bir sonraki sipariş bozulur.
+
+      Sipariş akışı zaten ADIM 0.5'te sıfırlıyor; buradaki kazanç, bir
+      sonraki siparişi BEKLEMEDEN temizlemek.
+
+    Robot bağlantısı arka planda kurulduğu için beklenir; süre dolarsa
+    sessizce vazgeçilir (robot yoksa sıfırlanacak bir şey de yok).
+    """
+    from service.order_service import cleanup_signals
+
+    try:
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            if await asyncio.to_thread(robot_mgr._is_connected_quick):
+                break
+            await asyncio.sleep(1.0)
+        else:
+            log.info("Robot %.0f sn içinde bağlanmadı — açılış sinyal "
+                     "sıfırlaması atlandı.", timeout)
+            return
+
+        # Çalışan bir siparişin sinyallerini sıfırlamak akışı bozar.
+        task = order_route._active_task
+        if task and not task.done():
+            log.info("Aktif sipariş var — açılış sinyal sıfırlaması atlandı.")
+            return
+
+        log.info("🤖 Robot bağlandı — önceki oturumdan kalmış olabilecek "
+                 "sinyaller sıfırlanıyor...")
+        await cleanup_signals("startup")
+        log.info("🤖 Sinyaller temiz.")
+    except Exception as e:
+        log.warning("Açılış sinyal sıfırlaması yapılamadı (yoksayıldı): %s", e)
 
 
 async def _check_syrup() -> bool:
