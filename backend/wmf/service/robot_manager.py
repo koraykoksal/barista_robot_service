@@ -177,15 +177,30 @@ class RobotManager:
         Not: connect_robot() içinde _tcp_reachable() ile port önce test
         edildiğinden gereksiz RPC() nesnesi oluşturulmaz, thread birikmez.
         """
-        with self._lock:
-            if self._is_connected_quick():
-                return
+        # ⚠️  KİLİT YENİDEN DENEMELER ARASINDA BIRAKILIR.
+        #
+        # DÜZELTİLEN HATA: eskiden `with self._lock:` bu döngünün TAMAMINI
+        # sarıyordu. Robot erişilemezken döngü hiç bitmediği için kilit
+        # SONSUZA KADAR tutuluyordu. Sonuç:
+        #   • get_mode() → `with self._lock` → sonsuza kadar bloke
+        #   • /robot/status her 2 sn'de bir çağrıldığı için istekler
+        #     asyncio'nun thread havuzunda birikiyor
+        #   • havuz dolunca to_thread kullanan HER ŞEY donuyor —
+        #     /stock/status dahil (SQLite de thread istiyor)
+        #   • yalnızca /machine/status yaşıyordu, çünkü o saf async
+        #
+        # Sahada görünen belirti: backend ayakta, / ucu 200 dönüyor ama
+        # /robot/status ve /stock/status hiç yanıt vermiyor; arayüz
+        # "hazır değil" diyor.
+        attempt = 0
+        while not self._stop.is_set():
+            with self._lock:
+                if self._is_connected_quick():
+                    return
 
-            # Eski bozuk RPC nesnesini temizle (is_conect flag reset dahil)
-            self._destroy_rpc()
+                # Eski bozuk RPC nesnesini temizle (is_conect flag reset dahil)
+                self._destroy_rpc()
 
-            attempt = 0
-            while not self._stop.is_set():
                 attempt += 1
                 # Log gürültüsünü kıs: ilk 3 deneme her seferinde, sonra
                 # yaklaşık dakikada bir (12 denemede bir). Robot yokken
@@ -207,9 +222,13 @@ class RobotManager:
                 if verbose:
                     print(f"[RobotManager] ❌ Robot bağlanamadı (#{attempt}) — "
                           f"arka planda denemeye devam ediliyor (5s aralık).")
-                time.sleep(5)
 
-            print("[RobotManager] _ensure_connected: stop sinyali geldi, çıkılıyor.")
+            # ── KİLİT BURADA BIRAKILDI ──
+            # Bekleme kilidin dışında yapılır ki durum sorguları
+            # (get_mode → /robot/status) araya girebilsin.
+            time.sleep(5)
+
+        print("[RobotManager] _ensure_connected: stop sinyali geldi, çıkılıyor.")
 
     def _monitor_loop(self) -> None:
         """
@@ -545,7 +564,27 @@ class RobotManager:
         _PROGRAM_LABELS = {1: "stopped", 2: "running", 3: "paused"}
         _STATE_LABELS   = {1: "stopped", 2: "running", 3: "paused", 4: "drag"}
 
-        with self._lock:
+        # Kilit BEKLEMEDEN alınır (en fazla 0,5 sn).
+        #
+        # Durum sorgusu asla asılı kalmamalı: /robot/status her 2 sn'de bir
+        # çağrılıyor ve her çağrı asyncio thread havuzundan bir thread
+        # tutuyor. Bağlantı denemesi sürerken beklemeye geçilirse istekler
+        # birikip havuzu doldurur ve to_thread kullanan diğer uçlar
+        # (/stock/status → SQLite) de donar.
+        #
+        # Kilit meşgulse "bağlanıyor" bilgisi döner — bu bir hata değil,
+        # o anki gerçek durum.
+        if not self._lock.acquire(timeout=0.5):
+            return {
+                "connected"    : False,
+                "robot_mode"   : None,
+                "program_state": None,
+                "robot_state"  : None,
+                "mode_label"   : "connecting",
+                "program_label": "connecting",
+                "state_label"  : "connecting",
+            }
+        try:
             if not self._is_connected_quick():
                 return {
                     "connected"    : False,
@@ -590,6 +629,8 @@ class RobotManager:
                     "program_label": "error",
                     "state_label"  : "error",
                 }
+        finally:
+            self._lock.release()
 
     def get_robot_mode_safe(self) -> str:
         """
