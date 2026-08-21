@@ -1,17 +1,19 @@
 # ══════════════════════════════════════════════════════════════
 # Barista Robot Kiosk — Docker Compose
 #
-# İki servis:
+# İki servis, ikisi de host üzerinden ip:port ile erişilir:
 #   backend   FastAPI (robot + kahve makinesi + syrup + DB)  → :8000
-#   frontend  nginx ile servis edilen kiosk arayüzü          → :8080
+#   frontend  nginx ile servis edilen kiosk arayüzü          → :8088
 #
 # HIZLI BAŞLANGIÇ:
 #   1. backend/wmf/.env dosyasını hazırlayın (.env.example'dan kopyalayın)
-#   2. Aşağıdaki KIOSK_API_URL'i kiosk'un backend'e erişeceği adrese ayarlayın
+#   2. cp .env.docker.example .env   → SUNUCU_IP ve portları doldurun
 #   3. docker compose up -d --build
 #
-# Arayüz:   http://<host-ip>:8080
-# API:      http://<host-ip>:8000
+# ⚠️  SUNUCU IP'Sİ ŞART: KIOSK_API_URL "localhost" OLAMAZ. Bu adres
+#     kiosk tarayıcısının içine gömülür; tarayıcı sunucunun kendisinde
+#     değilse "localhost" kendi makinesini işaret eder ve arayüz
+#     backend'e hiç ulaşamaz.
 #
 # DURDURMA:   docker compose down
 # LOGLAR:     docker compose logs -f backend
@@ -28,6 +30,10 @@ services:
       dockerfile: Dockerfile
     image: barista-backend:latest
     container_name: barista-backend
+
+    # Sunucu yeniden başladığında konteyner kendiliğinden kalkar.
+    # (Docker servisinin de açılışta etkin olması gerekir —
+    #  sudo systemctl enable docker)
     restart: unless-stopped
 
     # Tüm yapılandırma .env dosyasından okunur (MONGO_URI, ROBOT_IP,
@@ -35,8 +41,14 @@ services:
     env_file:
       - ./backend/wmf/.env
 
+    environment:
+      # Konteyner varsayılan olarak UTC çalışır; log saatleri sunucununkiyle
+      # tutmazsa "dün akşam ne oldu" araştırması zorlaşır.
+      TZ: ${TZ:-Europe/Istanbul}
+
+    # Host'un TÜM arayüzlerinde dinler → http://<sunucu-ip>:8000
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
 
     # ── Kalıcı veri ──
     # SQLite veritabanı ve loglar konteyner silinse bile kaybolmasın.
@@ -49,24 +61,27 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/',timeout=4).status==200 else 1)"]
       interval: 30s
       timeout: 5s
-      start_period: 20s
+      start_period: 40s     # açılış ölçüldü: ortalama 9 sn, en uzun 17 sn
       retries: 3
+
+    # Docker'ın kendi json log dosyası sınırsız büyür. Kiosk 7/24
+    # çalıştığı için sınır konmazsa disk zamanla dolar. (Uygulamanın
+    # kendi logları /app/logs altında ayrıca döndürülüyor.)
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
     # ── DONANIM ERİŞİMİ ──────────────────────────────────────
     # Robot (XML-RPC), kahve makinesi (WebSocket) ve syrup dispenser
-    # (TCP) yerel ağdaki cihazlardır. Konteynerin bunlara ulaşması için
-    # iki seçenek var:
+    # (TCP) yerel ağdaki cihazlardır. Cihazlara IP ile erişildiği ve
+    # host ile aynı LAN'da oldukları sürece varsayılan bridge ağı yeterli.
     #
-    # SEÇENEK A (varsayılan): bridge ağ + cihaz IP'leri .env'de.
-    #   Cihazlar host ile aynı LAN'daysa ve IP ile erişiliyorsa bu yeterli.
-    #   Docker NAT üzerinden dışarı çıkışa izin verir.
-    #
-    # SEÇENEK B: host ağı — konteyner doğrudan host'un ağını kullanır.
-    #   Cihaz keşfi (broadcast/mDNS) veya katı ağ kurulumları için gerekir.
-    #   Etkinleştirmek için: aşağıdaki "networks" ve "ports" satırlarını
-    #   silin, yerine şunu ekleyin:
-    #       network_mode: host
-    #   (host modunda port eşlemesi yoktur; uygulama doğrudan :8000'de açılır)
+    # Cihaz keşfi (broadcast/mDNS) gerekiyorsa veya bağlantı kurulamıyorsa
+    # "networks" ve "ports" satırlarını silip yerine şunu koyun:
+    #     network_mode: host
+    # (host modunda port eşlemesi yoktur; uygulama doğrudan :8000'de açılır)
     networks:
       - kiosk-net
 
@@ -79,29 +94,33 @@ services:
       dockerfile: Dockerfile
       # ── VİTE DEĞİŞKENLERİ DERLEME ANINDA GÖMÜLÜR ──
       # Kiosk'un tarayıcısı backend'e KENDİ makinesinden erişir; bu yüzden
-      # değer "backend" (konteyner adı) DEĞİL, kiosk'un ulaşabileceği
-      # gerçek adres olmalı — genelde host'un IP'si.
+      # değer "backend" (konteyner adı) DEĞİL, sunucunun LAN adresi olmalı.
       #
-      # Aşağıdaki KIOSK_API_URL'i .env veya kabuk değişkeniyle ayarlayın:
-      #   KIOSK_API_URL=http://192.168.1.44:8000 docker compose up --build
-      #
-      # NOT: Değeri değiştirince frontend'i YENİDEN BUILD etmek gerekir
-      # (--build), çünkü Vite bunu çalışma anında değil derlemede gömer.
-      # Alternatif: public/config.js dosyasını düzenleyip yeniden derleme
-      # olmadan da değiştirebilirsiniz (bkz. README — runtime config).
+      # Değeri değiştirince YENİDEN BUILD gerekir (--build), çünkü Vite
+      # bunu çalışma anında değil derlemede gömer. Alternatif:
+      # frontend/public/config.js ile derlemesiz değiştirme.
       args:
-        VITE_API_URL: ${KIOSK_API_URL:-http://localhost:8000}
+        VITE_API_URL: ${KIOSK_API_URL:?KIOSK_API_URL tanimlanmali - ornek http://192.168.1.44:8000}
         VITE_ADMIN_TOKEN: ${KIOSK_ADMIN_TOKEN:-}
+        VITE_ADMIN_PASSWORD: ${KIOSK_ADMIN_PASSWORD:-wmf2024}
     image: barista-frontend:latest
     container_name: barista-frontend
     restart: unless-stopped
 
-    ports:
-      - "8088:80"
+    environment:
+      TZ: ${TZ:-Europe/Istanbul}
 
+    # Host'un TÜM arayüzlerinde dinler → http://<sunucu-ip>:8088
+    ports:
+      - "${FRONTEND_PORT:-8088}:80"
+
+    # Yalnızca BAŞLATMA SIRASI — "servis sağlıklı olana kadar bekle"
+    # bilinçli olarak KULLANILMIYOR. Arayüz backend'e ulaşamadığında
+    # ekranı açıp kırmızı uyarı şeridi göstermek üzere tasarlandı;
+    # sağlık koşulu olsaydı backend bozukken kiosk ekranı hiç açılmaz,
+    # personel siyah ekranla kalırdı.
     depends_on:
-      backend:
-        condition: service_healthy
+      - backend
 
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
@@ -109,6 +128,12 @@ services:
       timeout: 4s
       start_period: 10s
       retries: 3
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
     networks:
       - kiosk-net

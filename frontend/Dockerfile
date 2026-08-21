@@ -25,8 +25,12 @@ COPY . .
 # docker build --build-arg VITE_API_URL=http://192.168.1.44:8000 ...
 ARG VITE_API_URL=http://127.0.0.1:8000
 ARG VITE_ADMIN_TOKEN=
+# /stock sayfasının giriş parolası. Verilmezse koddaki varsayılan
+# ("wmf2024") derlemeye girer — sahaya çıkarken mutlaka geçin.
+ARG VITE_ADMIN_PASSWORD=
 ENV VITE_API_URL=$VITE_API_URL
 ENV VITE_ADMIN_TOKEN=$VITE_ADMIN_TOKEN
+ENV VITE_ADMIN_PASSWORD=$VITE_ADMIN_PASSWORD
 
 RUN npm run build
 
